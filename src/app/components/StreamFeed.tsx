@@ -55,7 +55,7 @@ export default function StreamFeed() {
   }, []);
 
   return (
-    <div className="flex flex-col bg-zinc-950/60 border border-zinc-850 p-4 rounded-3xl liquid-glass overflow-hidden gap-4">
+    <div className="flex flex-col bg-zinc-950/60 border border-zinc-850 p-4 rounded-3xl liquid-glass overflow-hidden gap-4 flex-1">
       <div className="flex items-center justify-between border-b border-zinc-850 pb-3 shrink-0">
         <div className="flex items-center gap-2">
           <svg className="w-5 h-5 text-rose-500 animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

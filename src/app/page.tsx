@@ -163,7 +163,7 @@ export default function Home() {
 
         {/* ПРАВАЯ КОЛОНКА */}
         {/* ПРАВАЯ КОЛОНКА (3/12): Прижимает юридический блок к самому низу */}
-        <div className="lg:col-span-3 flex flex-col gap-8 h-full self-stretch justify-between">
+        <div className="lg:col-span-3 flex flex-col gap-8 h-full self-stretch">
           <StreamFeed />
           
           {/* ЮРИДИЧЕСКИЙ БЛОК */}
