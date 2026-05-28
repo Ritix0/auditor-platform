@@ -74,7 +74,7 @@ export default function StreamFeed() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-2.5 overflow-y-auto pr-0.5 justify-start adaptive-feed-height shrink-0">
+      <div className="flex-1 flex flex-col gap-2.5 overflow-y-auto pr-0.5 justify-start">
         <AnimatePresence initial={false} mode="popLayout">
           {logs.map((log) => {
             const opRtp = log.cost > 0 ? Math.round((log.won / log.cost) * 100) : 0;
@@ -147,7 +147,7 @@ export default function StreamFeed() {
           </span>
         </div>
         <div className="flex justify-between text-zinc-500">
-          <span>СРЕДНИЙ RTP ЛЕНТЫ (5 ШТ):</span>
+          <span>СРЕДНИЙ RTP ЛЕНТЫ ({logs.length} ШТ):</span>
           <span className={`font-bold ${avgRtp > 45 ? "text-emerald-400" : "text-rose-500"}`}>
             {avgRtp}%
           </span>
