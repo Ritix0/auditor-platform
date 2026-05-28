@@ -15,12 +15,10 @@ interface LogEntry {
   user_id: string | null;
 }
 
-// ГЛОБАЛЬНЫЙ БУФЕР КЭША В ПАМЯТИ СЕРВЕРА
 let cachedLogs: LogEntry[] = [];
 let lastFetchTime = 0;
-const CACHE_TTL = 600000; // 10 минут для глобальной статистики
+const CACHE_TTL = 600000; // 10 минут
 
-// Описание структуры персональной статистики для строгой типизации
 interface PersonalData {
   totalSpent: number;
   totalWon: number;
@@ -39,9 +37,8 @@ interface PersonalData {
   }[];
 }
 
-// ПЕРСОНАЛЬНЫЙ КЭШ ДЛЯ ID ПОЛЬЗОВАТЕЛЕЙ (ПОЛНОСТЬЮ ТИПИЗИРОВАННЫЙ, БЕЗ ANY)
 const userCache = new Map<string, { data: PersonalData; timestamp: number }>();
-const USER_CACHE_TTL = 1800000; // 30 минут (30 * 60 * 1000 мс)
+const USER_CACHE_TTL = 1800000; // 30 минут
 
 export async function GET(request: Request) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
@@ -53,16 +50,15 @@ export async function GET(request: Request) {
     const siteFilter = searchParams.get("site") || "all";
     const caseFilter = searchParams.get("case") || "";
     const typeFilter = searchParams.get("type") || "all";
-    const userIdQuery = searchParams.get("user_id") || ""; // Запрос персонального ID
+    const userIdQuery = searchParams.get("user_id") || "";
 
     const nowTime = Date.now();
 
-    // 1. ЕСЛИ ЭТО ЗАПРОС К ЛИЧНОЙ СТАТИСТИКЕ ПО ID — ПРОВЕРЯЕМ 30-МИНУТНЫЙ ПЕРСОНАЛЬНЫЙ КЭШ
+    // 1. ПЕРСОНАЛЬНЫЙ КЭШ
     if (userIdQuery !== "") {
       const cachedUser = userCache.get(userIdQuery);
       if (cachedUser && nowTime - cachedUser.timestamp < USER_CACHE_TTL) {
         const secondsRemaining = Math.round((USER_CACHE_TTL - (nowTime - cachedUser.timestamp)) / 1000);
-        console.log(`[CaseAudit UserCache] Статистика для ID ${userIdQuery} отдана из кэша. Кулдаун: ${secondsRemaining} сек.`);
         return NextResponse.json({
           success: true,
           fromCache: true,
@@ -72,7 +68,7 @@ export async function GET(request: Request) {
       }
     }
 
-    // 2. ОБНОВЛЕНИЕ ГЛОБАЛЬНОГО КЭША (Если пуст или устарел)
+    // 2. ОБНОВЛЕНИЕ ГЛОБАЛЬНОГО КЭША
     if (nowTime - lastFetchTime > CACHE_TTL || cachedLogs.length === 0) {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/audit_logs?order=created_at.desc&limit=5000`, {
         headers: {
@@ -91,7 +87,7 @@ export async function GET(request: Request) {
       }
     }
 
-    // 3. ОБРАБОТКА ПЕРСОНАЛЬНОГО ЗАПРОСА ПО ID ПОЛЬЗОВАТЕЛЯ
+    // 3. ОБРАБОТКА ПЕРСОНАЛЬНОГО ЗАПРОСА
     if (userIdQuery !== "") {
       const userLogs = cachedLogs.filter(log => log.user_id === userIdQuery);
       
@@ -135,7 +131,6 @@ export async function GET(request: Request) {
         recentLogs: userRecent
       };
 
-      // Сохраняем в кэш на 30 минут
       userCache.set(userIdQuery, {
         data: personalData,
         timestamp: nowTime
@@ -149,6 +144,21 @@ export async function GET(request: Request) {
       });
     }
 
+    // ВЫЧИСЛЕНИЕ УНИКАЛЬНЫХ АУДИТОРОВ
+    const uniqueUsers = new Set<string>();
+    cachedLogs.forEach(log => {
+      if (
+        log.user_id && 
+        typeof log.user_id === "string" && 
+        log.user_id.trim() !== "" && 
+        log.user_id.trim() !== "null" && 
+        log.user_id.trim() !== "undefined"
+      ) {
+        uniqueUsers.add(log.user_id.trim());
+      }
+    });
+    const uniqueAuditorsCount = uniqueUsers.size;
+
     // 4. СТАНДАРТНАЯ ФИЛЬТРАЦИЯ ГЛОБАЛЬНЫХ ЛОГОВ
     let filteredLogs = cachedLogs;
     if (caseFilter !== "") {
@@ -161,7 +171,6 @@ export async function GET(request: Request) {
       filteredLogs = filteredLogs.filter(log => log.type === typeFilter);
     }
 
-    // Расчет глобальной телеметрии
     let totalSpent = 0;
     let totalWon = 0;
     const siteVolume: Record<string, { count: number; spent: number; won: number }> = {
@@ -185,10 +194,87 @@ export async function GET(request: Request) {
 
     const globalRtp = totalSpent > 0 ? Math.round((totalWon / totalSpent) * 100) : 0;
 
-    // Расчет недельной статистики (за последние 7 календарных дней)
+    // Срез за сегодняшний календарный день (Резолюция по часам)
+    const today = new Date();
+    const todayYear = today.getFullYear();
+    const todayMonth = today.getMonth();
+    const todayDate = today.getDate();
+
+    const todayLogs = filteredLogs.filter(log => {
+      const logDate = new Date(log.created_at);
+      return logDate.getFullYear() === todayYear &&
+             logDate.getMonth() === todayMonth &&
+             logDate.getDate() === todayDate;
+    });
+
+    const todayHourlyMap: Record<number, {
+      spentAll: number; wonAll: number;
+      spentCase: number; wonCase: number;
+      spentUpgrade: number; wonUpgrade: number;
+    }> = {};
+
+    for (let i = 0; i < 24; i++) {
+      todayHourlyMap[i] = {
+        spentAll: 0, wonAll: 0,
+        spentCase: 0, wonCase: 0,
+        spentUpgrade: 0, wonUpgrade: 0
+      };
+    }
+
+    todayLogs.forEach(log => {
+      const hour = new Date(log.created_at).getHours();
+      const spent = Number(log.spent);
+      const won = Number(log.won);
+
+      todayHourlyMap[hour].spentAll += spent;
+      todayHourlyMap[hour].wonAll += won;
+
+      if (log.type === "case") {
+        todayHourlyMap[hour].spentCase += spent;
+        todayHourlyMap[hour].wonCase += won;
+      } else if (log.type === "upgrade") {
+        todayHourlyMap[hour].spentUpgrade += spent;
+        todayHourlyMap[hour].wonUpgrade += won;
+      }
+    });
+
+    const todayStats = Object.entries(todayHourlyMap).map(([hour, data]) => ({
+      hour: `${hour.padStart(2, "0")}:00`,
+      rtp: data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0,
+      rtpCase: data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : null,
+      rtpUpgrade: data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : null
+    }));
+
+    // Вычисление интервальных срезов по 30 минут за сегодняшний день
+    const intervalMap: Record<string, { spent: number; won: number }> = {};
+    for (let hour = 0; hour < 24; hour++) {
+      for (const min of [0, 30]) {
+        const label = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+        intervalMap[label] = { spent: 0, won: 0 };
+      }
+    }
+
+    todayLogs.forEach(log => {
+      const date = new Date(log.created_at);
+      const hour = date.getHours();
+      const minutes = date.getMinutes();
+      const minGroup = minutes < 30 ? 0 : 30;
+      const label = `${String(hour).padStart(2, "0")}:${String(minGroup).padStart(2, "0")}`;
+      if (intervalMap[label]) {
+        intervalMap[label].spent += Number(log.spent);
+        intervalMap[label].won += Number(log.won);
+      }
+    });
+
+    const intervalStats = Object.entries(intervalMap).map(([interval, data]) => ({
+      interval,
+      rtp: data.spent > 0 ? Math.round((data.won / data.spent) * 100) : 0
+    }));
+
+    // Сводка по неделям
     const weeklyMap = new Map<string, { spent: number; won: number }>();
     filteredLogs.forEach(log => {
-      const dateStr = log.created_at.split("T")[0]; // YYYY-MM-DD
+      const dateStr = log.created_at.split("T")[0];
       const current = weeklyMap.get(dateStr) || { spent: 0, won: 0 };
       weeklyMap.set(dateStr, {
         spent: current.spent + Number(log.spent),
@@ -198,7 +284,7 @@ export async function GET(request: Request) {
 
     const weeklyStats = Array.from(weeklyMap.entries())
       .map(([date, data]) => ({
-        day: date.split("-").slice(1).reverse().join("."), // MM.DD -> DD.MM
+        day: date.split("-").slice(1).reverse().join("."),
         rtp: data.spent > 0 ? Math.round((data.won / data.spent) * 100) : 0
       }))
       .reverse()
@@ -206,13 +292,13 @@ export async function GET(request: Request) {
 
     // Расчет циклической дневной статистики
     const weekdayMap: Record<number, { spent: number; won: number; count: number }> = {
-      1: { spent: 0, won: 0, count: 0 }, // ПН
-      2: { spent: 0, won: 0, count: 0 }, // ВТ
-      3: { spent: 0, won: 0, count: 0 }, // СР
-      4: { spent: 0, won: 0, count: 0 }, // ЧТ
-      5: { spent: 0, won: 0, count: 0 }, // ПТ
-      6: { spent: 0, won: 0, count: 0 }, // СБ
-      0: { spent: 0, won: 0, count: 0 }  // ВС
+      1: { spent: 0, won: 0, count: 0 },
+      2: { spent: 0, won: 0, count: 0 },
+      3: { spent: 0, won: 0, count: 0 },
+      4: { spent: 0, won: 0, count: 0 },
+      5: { spent: 0, won: 0, count: 0 },
+      6: { spent: 0, won: 0, count: 0 },
+      0: { spent: 0, won: 0, count: 0 }
     };
 
     filteredLogs.forEach(log => {
@@ -239,7 +325,7 @@ export async function GET(request: Request) {
       };
     });
 
-    // Почасовая суточная статистика (24 часа)
+    // Почасовая статистика
     const hourlyMap: Record<number, { spent: number; won: number }> = {};
     for (let i = 0; i < 24; i++) {
       hourlyMap[i] = { spent: 0, won: 0 };
@@ -259,7 +345,6 @@ export async function GET(request: Request) {
       rtp: data.spent > 0 ? Math.round((data.won / data.spent) * 100) : 0
     }));
 
-    // Список последних 15 реальных транзакций для живой ленты
     const liveFeed = filteredLogs.slice(0, 15).map(log => ({
       id: String(log.id),
       timestamp: new Date(log.created_at).toLocaleTimeString("ru-RU", { hour12: false }),
@@ -272,9 +357,7 @@ export async function GET(request: Request) {
       type: log.type
     }));
 
-    // Сводка по самым активным кейсам (Top Cases)
     const caseMetrics: Record<string, { spent: number; won: number; count: number; site: string }> = {};
-    
     filteredLogs.forEach(log => {
       if (log.type === "case" && log.item_name !== "unknown") {
         if (!caseMetrics[log.item_name]) {
@@ -307,7 +390,10 @@ export async function GET(request: Request) {
       cyclicalStats,
       hourlyStats,
       liveFeed,
-      topCases
+      topCases,
+      uniqueAuditors: uniqueAuditorsCount,
+      todayStats,
+      intervalStats // Передаем на фронтенд расчет интервалов за сегодня
     });
 
   } catch (err) {

@@ -6,7 +6,7 @@ import StreamFeed from "@/app/components/StreamFeed";
 import AuditCharts from "@/app/components/AuditCharts";
 import StrategySandbox from "@/app/components/StrategySandbox";
 import ExtensionBanner from "@/app/components/ExtensionBanner";
-import PersonalStats from "@/app/components/PersonalStats"; // Подключили новый личный кабинет
+import PersonalStats from "@/app/components/PersonalStats";
 import CaseModal from "@/app/components/CaseModal";
 import Link from "next/link";
 import { Shield, Database, FileCode, UsersFour } from "@phosphor-icons/react";
@@ -25,6 +25,7 @@ export default function Home() {
     totalAudited: number;
     globalRtp: number;
     siteVolume: Record<string, { count: number; spent: number; won: number }>;
+    uniqueAuditors: number; // Новое типизированное свойство
   } | null>(null);
 
   const [selectedCase, setSelectedCase] = useState<CaseItem | null>(null);
@@ -39,7 +40,8 @@ export default function Home() {
           setDbData({
             totalAudited: json.totalAudited,
             globalRtp: json.globalRtp,
-            siteVolume: json.siteVolume
+            siteVolume: json.siteVolume,
+            uniqueAuditors: json.uniqueAuditors || 0 // Присвоение значения
           });
         }
       } catch (err) {
@@ -143,10 +145,11 @@ export default function Home() {
             </div>
           </div>
 
-          <PersonalStats /> {/* Новый модуль */}
+          <PersonalStats />
 
           <div className="flex-1">
-            <ExtensionBanner />
+            {/* Передаем реальное количество уникальных аудиторов в баннер */}
+            <ExtensionBanner uniqueAuditors={dbData?.uniqueAuditors} />
           </div>
 
         </div>
@@ -162,7 +165,6 @@ export default function Home() {
         </div>
 
         {/* ПРАВАЯ КОЛОНКА */}
-        {/* ПРАВАЯ КОЛОНКА (3/12): Прижимает юридический блок к самому низу */}
         <div className="lg:col-span-3 flex flex-col gap-8 h-full self-stretch">
           <StreamFeed />
           
@@ -219,7 +221,7 @@ export default function Home() {
         </div>
       </footer>
 
-      {/* БЕЗОПАСНЫЙ ПОЛНОЭКРАННЫЙ ВЫЗОВ МОДАЛКИ СНАРУЖИ СЕТКИ И ФИЛЬТРОВ */}
+      {/* Безопасный вызов модалки */}
       <AnimatePresence>
         {selectedCase && (
           <CaseModal selectedCase={selectedCase} onClose={() => setSelectedCase(null)} />

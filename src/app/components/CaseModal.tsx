@@ -22,12 +22,21 @@ interface StatsData {
   cyclicalStats: { name: string; rtp: number; info: string }[];
   hourlyStats: { hour: string; rtp: number }[];
   intervalStats: { interval: string; rtp: number }[];
+  todayStats: { hour: string; rtp: number; rtpCase: number | null; rtpUpgrade: number | null }[];
 }
 
 interface CaseModalProps {
   selectedCase: CaseItem;
   onClose: () => void;
 }
+
+const modalTabs = [
+  { id: "today", label: "Сегодня (Часы)", icon: Sparkle },
+  { id: "intervals", label: "Сегодня (30м)", icon: Hourglass },
+  { id: "weekly", label: "Неделя", icon: TrendUp },
+  { id: "dayOfWeek", label: "По дням", icon: CalendarCheck },
+  { id: "hourly", label: "По часам (Все время)", icon: Clock }
+] as const;
 
 const tooltipStyle = {
   background: "#18181b",
@@ -49,10 +58,10 @@ const itemStyle = {
 };
 
 export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
+  const [activeModalTab, setActiveModalTab] = useState<"today" | "intervals" | "weekly" | "dayOfWeek" | "hourly">("today");
   const [caseModalData, setCaseModalData] = useState<StatsData | null>(null);
   const [loadingModal, setLoadingModal] = useState(true);
 
-  // Блокировка скролла страницы при монтировании модалки
   useEffect(() => {
     document.body.style.overflow = "hidden";
     return () => {
@@ -60,7 +69,6 @@ export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
     };
   }, []);
 
-  // Загрузка детальной статистики кейса
   useEffect(() => {
     let active = true;
     const fetchCaseDetails = async () => {
@@ -73,7 +81,8 @@ export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
             weeklyStats: json.weeklyStats || [],
             cyclicalStats: json.cyclicalStats || [],
             hourlyStats: json.hourlyStats || [],
-            intervalStats: json.intervalStats || []
+            intervalStats: json.intervalStats || [],
+            todayStats: json.todayStats || []
           });
         }
       } catch (err) {
@@ -88,7 +97,6 @@ export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
     };
   }, [selectedCase]);
 
-  // Динамический математический анализатор окупаемости
   const generateAnalysis = (caseItem: CaseItem, stats: StatsData) => {
     const rtp = caseItem.rtp;
     let expectationText = "";
@@ -191,7 +199,7 @@ export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 flex-1 items-stretch">
             
-            {/* ЛЕВАЯ ЧАСТЬ (4 СТОЛБЦА) */}
+            {/* ЛЕВАЯ ЧАСТЬ */}
             <div className="lg:col-span-4 flex flex-col gap-6 justify-between">
               
               <div className="flex flex-col gap-4">
@@ -217,7 +225,7 @@ export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
                 </div>
               </div>
 
-              {/* ПОЛНОСТЬЮ ДИНАМИЧЕСКИЙ ВЕРДИКТ */}
+              {/* МАТЕМАТИЧЕСКИЙ ВЕРДИКТ */}
               <div className="bg-rose-950/10 border border-rose-900/30 p-5 rounded-2xl flex flex-col gap-3">
                 <div className="flex items-center gap-2">
                   <Warning className="w-5.5 h-5.5 text-rose-500 shrink-0" />
@@ -252,126 +260,138 @@ export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
 
             </div>
 
-            {/* ПРАВАЯ ЧАСТЬ (8 СТОЛБЦОВ): 4 КРУПНЫХ ГРАФИКА */}
-            <div className="lg:col-span-8 grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
+            {/* ПРАВАЯ ЧАСТЬ С ВНЕШНИМИ ВКЛАДКАМИ СРЕЗОВ */}
+            <div className="lg:col-span-8 flex flex-col gap-6">
               
-              {/* График 1: Недельный тренд */}
-              <div className="flex flex-col gap-3 border border-zinc-850 p-5 rounded-2xl bg-zinc-900/20 min-h-60">
-                <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-400 font-bold uppercase tracking-wider">
-                  <TrendUp className="w-4.5 h-4.5 text-rose-500" />
-                  <span>Недельный тренд окупаемости</span>
-                </div>
-                <div className="flex-1 relative mt-1">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={caseModalData.weeklyStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="modalColorRtp" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.2}/>
-                          <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
-                      <XAxis dataKey="day" stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} />
-                      <YAxis stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} unit="%" />
-                      <Tooltip
-                        contentStyle={tooltipStyle}
-                        labelStyle={labelStyle}
-                        itemStyle={itemStyle}
-                        formatter={(value: unknown) => [`${value}%`, "RTP"]}
-                      />
-                      <Area type="monotone" dataKey="rtp" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill="url(#modalColorRtp)" />
-                      <ReferenceLine y={45} stroke="#10b981" strokeDasharray="3 3" />
-                    </AreaChart>
-                  </ResponsiveContainer>
+              {/* НАВИГАТОР ПОДДЕРЖИВАЕМЫХ ШКАЛ В МОДАЛКЕ */}
+              <div className="overflow-x-auto scrollbar-none w-full bg-zinc-900/50 border border-zinc-800 p-1.5 rounded-xl" style={{ scrollbarWidth: "none" }}>
+                <div className="flex gap-2 min-w-max w-full">
+                  {modalTabs.map((tab) => {
+                    const Icon = tab.icon;
+                    const isActive = activeModalTab === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={() => setActiveModalTab(tab.id)}
+                        className="relative flex-1 py-2 px-4 rounded-lg text-xs font-mono flex items-center justify-center gap-2 cursor-pointer z-10 transition-colors"
+                        style={{ color: isActive ? "#ffffff" : "#a1a1aa" }}
+                      >
+                        {isActive && (
+                          <motion.div
+                            layoutId="active-modal-chart-tab"
+                            className="absolute inset-0 bg-zinc-800 border border-zinc-750 rounded-lg -z-10"
+                            transition={{ type: "spring", stiffness: 180, damping: 18 }}
+                          />
+                        )}
+                        <Icon className="w-4.5 h-4.5 shrink-0" />
+                        <span className="truncate">{tab.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* График 2: По дням недели */}
-              <div className="flex flex-col gap-3 border border-zinc-850 p-5 rounded-2xl bg-zinc-900/20 min-h-60">
-                <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-400 font-bold uppercase tracking-wider">
-                  <CalendarCheck className="w-4.5 h-4.5 text-rose-500" />
-                  <span>Окупаемость по дням недели</span>
-                </div>
-                <div className="flex-1 relative mt-1">
+              {/* ПАНЕЛЬ АКТИВНОГО ГРАФИКА */}
+              <div className="flex-1 border border-zinc-850 p-6 rounded-2xl bg-zinc-900/20 min-h-100 flex flex-col gap-3">
+                <div className="flex-1 relative">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={caseModalData.cyclicalStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                      <XAxis dataKey="name" stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} />
-                      <YAxis stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} unit="%" />
-                      <Tooltip
-                        contentStyle={tooltipStyle}
-                        labelStyle={labelStyle}
-                        itemStyle={itemStyle}
-                        formatter={(value: unknown, _name: unknown, props: unknown) => {
-                          const payloadEntry = props as { payload?: { info?: string } } | undefined;
-                          return [`${value}%`, payloadEntry?.payload?.info || ""];
-                        }}
-                      />
-                      <Bar dataKey="rtp" radius={[3, 3, 0, 0]}>
-                        {caseModalData.cyclicalStats.map((entry, index) => {
-                          const isRigged = entry.rtp < 25;
-                          return <Cell key={`cell-modal-${index}`} fill={isRigged ? "#f43f5e" : "#52525b"} />;
-                        })}
-                      </Bar>
-                      <ReferenceLine y={45} stroke="#10b981" strokeDasharray="3 3" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              {/* График 3: По часам суток */}
-              <div className="flex flex-col gap-3 border border-zinc-850 p-5 rounded-2xl bg-zinc-900/20 min-h-60">
-                <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-400 font-bold uppercase tracking-wider">
-                  <Clock className="w-4.5 h-4.5 text-rose-500" />
-                  <span>Суточные колебания отдачи</span>
-                </div>
-                <div className="flex-1 relative mt-1">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={caseModalData.hourlyStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="colorHourlyModal" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2}/>
-                          <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
-                      <XAxis dataKey="hour" stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} />
-                      <YAxis stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} unit="%" />
-                      <Tooltip
-                        contentStyle={tooltipStyle}
-                        labelStyle={labelStyle}
-                        itemStyle={itemStyle}
-                        formatter={(value: unknown) => [`${value}%`, "RTP"]}
-                      />
-                      <Area type="step" dataKey="rtp" stroke="#ef4444" strokeWidth={1.2} fillOpacity={1} fill="url(#colorHourlyModal)" />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              {/* График 4: 30-минутные интервалы */}
-              <div className="flex flex-col gap-3 border border-zinc-850 p-5 rounded-2xl bg-zinc-900/20 min-h-60">
-                <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-400 font-bold uppercase tracking-wider">
-                  <Hourglass className="w-4.5 h-4.5 text-blue-400" />
-                  <span>Интервальный срез (30м) за сегодня</span>
-                </div>
-                <div className="flex-1 relative mt-1">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={caseModalData.intervalStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="colorIntervalModal" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#60a5fa" stopOpacity={0.2}/>
-                          <stop offset="95%" stopColor="#60a5fa" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
-                      <XAxis dataKey="interval" stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} />
-                      <YAxis stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} unit="%" />
-                      <Tooltip
-                        contentStyle={tooltipStyle}
-                        labelStyle={labelStyle}
-                        itemStyle={itemStyle}
-                        formatter={(value: unknown) => [`${value}%`, "RTP"]}
-                      />
-                      <Area type="monotone" dataKey="rtp" stroke="#60a5fa" strokeWidth={1.5} fillOpacity={1} fill="url(#colorIntervalModal)" />
-                      <ReferenceLine y={45} stroke="#10b981" strokeDasharray="3 3" />
-                    </AreaChart>
+                    {activeModalTab === "today" ? (
+                      <AreaChart data={caseModalData.todayStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="modalTodayCase" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                            <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <XAxis dataKey="hour" stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} />
+                        <YAxis stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} unit="%" />
+                        <Tooltip
+                          contentStyle={tooltipStyle}
+                          labelStyle={labelStyle}
+                          itemStyle={itemStyle}
+                          formatter={(value: unknown) => [`${value}%`, "RTP отдачи кейса"]}
+                        />
+                        <Area type="monotone" connectNulls dataKey="rtpCase" stroke="#10b981" strokeWidth={1.5} fillOpacity={1} fill="url(#modalTodayCase)" name="rtpCase" />
+                        <ReferenceLine y={45} stroke="#3f3f46" strokeDasharray="3 3" />
+                      </AreaChart>
+                    ) : activeModalTab === "intervals" ? (
+                      <AreaChart data={caseModalData.intervalStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="modalInterval" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#60a5fa" stopOpacity={0.2}/>
+                            <stop offset="95%" stopColor="#60a5fa" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <XAxis dataKey="interval" stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} />
+                        <YAxis stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} unit="%" />
+                        <Tooltip
+                          contentStyle={tooltipStyle}
+                          labelStyle={labelStyle}
+                          itemStyle={itemStyle}
+                          formatter={(value: unknown) => [`${value}%`, "RTP в этот интервал"]}
+                        />
+                        <Area type="monotone" connectNulls dataKey="rtp" stroke="#60a5fa" strokeWidth={1.5} fillOpacity={1} fill="url(#modalInterval)" />
+                        <ReferenceLine y={45} stroke="#10b981" strokeDasharray="3 3" />
+                      </AreaChart>
+                    ) : activeModalTab === "weekly" ? (
+                      <AreaChart data={caseModalData.weeklyStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="modalColorRtp" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.2}/>
+                            <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <XAxis dataKey="day" stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} />
+                        <YAxis stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} unit="%" />
+                        <Tooltip
+                          contentStyle={tooltipStyle}
+                          labelStyle={labelStyle}
+                          itemStyle={itemStyle}
+                          formatter={(value: unknown) => [`${value}%`, "RTP"]}
+                        />
+                        <Area type="monotone" dataKey="rtp" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill="url(#modalColorRtp)" />
+                        <ReferenceLine y={45} stroke="#10b981" strokeDasharray="3 3" />
+                      </AreaChart>
+                    ) : activeModalTab === "dayOfWeek" ? (
+                      <BarChart data={caseModalData.cyclicalStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                        <XAxis dataKey="name" stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} />
+                        <YAxis stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} unit="%" />
+                        <Tooltip
+                          contentStyle={tooltipStyle}
+                          labelStyle={labelStyle}
+                          itemStyle={itemStyle}
+                          formatter={(value: unknown, _name: unknown, props: unknown) => {
+                            const payloadEntry = props as { payload?: { info?: string } } | undefined;
+                            return [`${value}%`, payloadEntry?.payload?.info || ""];
+                          }}
+                        />
+                        <Bar dataKey="rtp" radius={[3, 3, 0, 0]}>
+                          {caseModalData.cyclicalStats.map((entry, index) => {
+                            const isRigged = entry.rtp < 25;
+                            return <Cell key={`cell-modal-${index}`} fill={isRigged ? "#f43f5e" : "#52525b"} />;
+                          })}
+                        </Bar>
+                        <ReferenceLine y={45} stroke="#10b981" strokeDasharray="3 3" />
+                      </BarChart>
+                    ) : (
+                      <AreaChart data={caseModalData.hourlyStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="colorHourlyModal" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2}/>
+                            <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <XAxis dataKey="hour" stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} />
+                        <YAxis stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} unit="%" />
+                        <Tooltip
+                          contentStyle={tooltipStyle}
+                          labelStyle={labelStyle}
+                          itemStyle={itemStyle}
+                          formatter={(value: unknown) => [`${value}%`, "RTP"]}
+                        />
+                        <Area type="step" dataKey="rtp" stroke="#ef4444" strokeWidth={1.2} fillOpacity={1} fill="url(#colorHourlyModal)" />
+                      </AreaChart>
+                    )}
                   </ResponsiveContainer>
                 </div>
               </div>

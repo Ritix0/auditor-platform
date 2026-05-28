@@ -1,26 +1,22 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { motion } from "framer-motion";
 import { DownloadSimple, Cpu, Users, Code, PaperPlaneTilt } from "@phosphor-icons/react";
 
-export default function ExtensionBanner() {
-  const [downloadCount, setDownloadCount] = useState(24382);
-  const [imageError, setImageError] = useState(false);
+interface ExtensionBannerProps {
+  uniqueAuditors?: number; // Принимаем реальное число свыше из родителя
+}
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setDownloadCount(prev => prev + Math.floor(Math.random() * 3) + 1);
-    }, 7000);
-    return () => clearInterval(interval);
-  }, []);
+export default function ExtensionBanner({ uniqueAuditors }: ExtensionBannerProps) {
+  const [imageError, setImageError] = useState(false);
 
   return (
     <div className="relative bg-zinc-950/60 border border-zinc-850 p-5 rounded-3xl liquid-glass overflow-hidden flex flex-col justify-between h-full glow-rose gap-5">
       <div className="absolute inset-0 grid-mesh opacity-10 pointer-events-none" />
       <div className="absolute -right-20 -top-20 w-44 h-44 rounded-full bg-rose-500/5 blur-[60px] pointer-events-none" />
 
-      {/* ШАПКА БАННЕРА (ЗАПРЕЩЕНО СЖАТИЕ) */}
+      {/* ШАПКА БАННЕРА */}
       <div className="relative z-10 flex flex-col gap-3 shrink-0">
         <div className="flex items-center gap-2">
           <Cpu className="w-5 h-5 text-rose-500 animate-pulse" />
@@ -36,10 +32,8 @@ export default function ExtensionBanner() {
         </p>
       </div>
 
-      {/* ЦЕНТРАЛЬНЫЙ БЛОК: КРУПНЫЙ ЦЕНТРИРОВАННЫЙ QR-КОД КВАДРАТОМ (ЗАПРЕЩЕНО СЖАТИЕ) */}
+      {/* ЦЕНТРАЛЬНЫЙ БЛОК: QR-КОД */}
       <div className="relative z-10 flex flex-col items-center justify-center gap-3 shrink-0">
-        
-        {/* Жесткий замок на идеальный квадрат 160x160px через инлайн-стили */}
         <div 
           className="bg-white border border-zinc-200 rounded-2xl relative overflow-hidden p-1.5 shadow-[0_8px_30px_rgba(255,255,255,0.08)] mx-auto flex items-center justify-center shrink-0"
           style={{ width: "160px", height: "160px", minWidth: "160px", minHeight: "160px" }}
@@ -48,11 +42,10 @@ export default function ExtensionBanner() {
             <img 
               src="/tg-qr.png" 
               alt="Telegram QR Protocol" 
-              className="absolute inset-0 w-full h-full object-contain rounded-xl block p-1" // Картинка сжата и вписана в квадрат
+              className="absolute inset-0 w-full h-full object-contain rounded-xl block p-1"
               onError={() => setImageError(true)}
             />
           ) : (
-            /* Резервный плейсхолдер во весь размер фрейма */
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950 text-center p-4 gap-2">
               <div className="absolute top-2 left-2 w-2 h-2 border-t border-l border-rose-500/80" />
               <div className="absolute top-2 right-2 w-2 h-2 border-t border-r border-rose-500/80" />
@@ -64,7 +57,6 @@ export default function ExtensionBanner() {
           )}
         </div>
 
-        {/* Текст-описание и прямая ссылка */}
         <div className="text-center flex flex-col gap-1">
           <p className="text-[10px] text-zinc-400 leading-normal max-w-[210px] mx-auto">
             Наведите камеру смартфона на QR-код для мгновенного перехода в официальный канал:
@@ -80,7 +72,7 @@ export default function ExtensionBanner() {
         </div>
       </div>
 
-      {/* НИЖНЯЯ ЧАСТЬ И КНОПКА СКАЧИВАНИЯ (ЗАПРЕЩЕНО СЖАТИЕ) */}
+      {/* НИЖНЯЯ ЧАСТЬ И КНОПКА СКАЧИВАНИЯ */}
       <div className="relative z-10 flex flex-col gap-3 shrink-0">
         <div className="flex flex-wrap gap-1 text-[9px] font-mono text-zinc-500 justify-center">
           <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800">CHROME</span>
@@ -108,7 +100,7 @@ export default function ExtensionBanner() {
             <span>Аудиторов в сети:</span>
           </div>
           <span className="font-bold text-zinc-300 font-mono">
-            {downloadCount.toLocaleString("ru-RU")}
+            {uniqueAuditors !== undefined ? uniqueAuditors.toLocaleString("ru-RU") : "..."}
           </span>
         </div>
 
@@ -117,7 +109,12 @@ export default function ExtensionBanner() {
             <Code className="w-3.5 h-3.5 text-zinc-400" />
             <span>Исходный код:</span>
           </div>
-          <a href="#github" className="text-zinc-400 hover:text-white underline">
+          <a 
+            href="https://github.com/Ritix0/caseaudit-extension" 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            className="text-zinc-400 hover:text-white underline"
+          >
             GitHub Repo
           </a>
         </div>

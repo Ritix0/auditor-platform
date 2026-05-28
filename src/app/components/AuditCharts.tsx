@@ -6,7 +6,7 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, 
   BarChart, Bar, Cell, ReferenceLine
 } from "recharts";
-import { TrendUp, CalendarCheck, Clock, Warning } from "@phosphor-icons/react";
+import { TrendUp, CalendarCheck, Clock, Warning, Sparkle } from "@phosphor-icons/react";
 
 interface CaseItem {
   name: string;
@@ -22,6 +22,7 @@ interface StatsData {
   cyclicalStats: { name: string; rtp: number; info: string }[];
   hourlyStats: { hour: string; rtp: number }[];
   topCases: CaseItem[];
+  todayStats: { hour: string; rtp: number; rtpCase: number | null; rtpUpgrade: number | null }[];
 }
 
 interface AuditChartsProps {
@@ -36,6 +37,7 @@ const SITE_WHITELIST = [
 ];
 
 const tabs = [
+  { id: "today", label: "Сегодня", icon: Sparkle },
   { id: "weekly", label: "Неделя", icon: TrendUp },
   { id: "dayOfWeek", label: "По дням", icon: CalendarCheck },
   { id: "hourly", label: "По часам", icon: Clock }
@@ -61,7 +63,7 @@ const itemStyle = {
 };
 
 export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
-  const [activeTab, setActiveTab] = useState<"weekly" | "dayOfWeek" | "hourly">("dayOfWeek");
+  const [activeTab, setActiveTab] = useState<"today" | "weekly" | "dayOfWeek" | "hourly">("today");
   const [selectedSite, setSelectedSite] = useState("all");
   const [selectedType, setSelectedType] = useState<"all" | "case" | "upgrade">("all");
   
@@ -79,7 +81,8 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
             weeklyStats: json.weeklyStats || [],
             cyclicalStats: json.cyclicalStats || [],
             hourlyStats: json.hourlyStats || [],
-            topCases: json.topCases || []
+            topCases: json.topCases || [],
+            todayStats: json.todayStats || []
           });
         }
       } catch (err) {
@@ -98,6 +101,18 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
 
   const getGlobalVerdict = () => {
     if (!chartData) return "Ожидание данных...";
+
+    if (activeTab === "today") {
+      const rtpList = chartData.todayStats.map(d => d.rtp).filter(r => r > 0);
+      const avgRtp = rtpList.length > 0 ? rtpList.reduce((a, b) => a + b, 0) / rtpList.length : 0;
+      if (avgRtp === 0) {
+        return "Сегодня еще не зарегистрировано достаточного объема транзакций для составления локального вердикта.";
+      }
+      if (avgRtp < 45) {
+        return `Сегодняшний средний RTP составляет ${Math.round(avgRtp)}%. Фиксируется снижение отдачи алгоритмов относительно нормы в 45%.`;
+      }
+      return `Сегодняшний средний RTP стабилен и составляет ${Math.round(avgRtp)}%. Системы работают в пределах стандартного математического ожидания.`;
+    }
     
     if (activeTab === "dayOfWeek") {
       const mon = chartData.cyclicalStats.find(d => d.name === "ПН")?.rtp || 0;
@@ -171,7 +186,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
           </div>
         </div>
 
-        {/* Тип-фильтр (Разделение на Кейсы и Апгрейды) */}
+        {/* Тип-фильтр */}
         <div className="flex flex-col gap-1.5 border-t border-zinc-900/80 pt-3">
           <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">ТИП АНАЛИЗИРУЕМЫХ ОПЕРАЦИЙ</span>
           <div className="flex gap-2">
@@ -197,9 +212,9 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
 
       </div>
 
-      {/* ТАБ-НАВИГАЦИЯ ВРЕМЕННЫХ ИНТЕРВАЛОВ */}
-      <div className="flex items-center justify-between bg-zinc-900/50 border border-zinc-800 p-1.5 rounded-xl">
-        <div className="flex w-full gap-2">
+      {/* ТАБ-НАВИГАЦИЯ ВРЕМЕННЫХ ИНТЕРВАЛОВ (ПРОКРУЧИВАЕМЫЙ КОНТЕЙНЕР) */}
+      <div className="overflow-x-auto scrollbar-none w-full bg-zinc-900/50 border border-zinc-800 p-1.5 rounded-xl" style={{ scrollbarWidth: "none" }}>
+        <div className="flex gap-2 min-w-max md:w-full">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -207,7 +222,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className="relative flex-1 py-2 px-3 rounded-lg text-xs font-mono flex items-center justify-center gap-2 cursor-pointer z-10 transition-colors"
+                className="relative flex-1 py-2 px-4 rounded-lg text-xs font-mono flex items-center justify-center gap-2 cursor-pointer z-10 transition-colors"
                 style={{ color: isActive ? "#ffffff" : "#a1a1aa" }}
               >
                 {isActive && (
@@ -225,6 +240,20 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
         </div>
       </div>
 
+      {/* КАСТОМНАЯ ЛЕГЕНДА ДЛЯ ТАБА «СЕГОДНЯ» */}
+      {activeTab === "today" && (
+        <div className="flex flex-wrap gap-4 items-center justify-center border-b border-zinc-900 pb-3 -mt-3 text-[9px] font-mono tracking-wider">
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            <span className="text-zinc-400 uppercase">ОКУПАЕМОСТЬ КЕЙСОВ</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-rose-500" />
+            <span className="text-zinc-400 uppercase">ОКУПАЕМОСТЬ АПГРЕЙДОВ</span>
+          </div>
+        </div>
+      )}
+
       {/* ТЕЛО ГРАФИКА */}
       <div className="flex-1 min-h-55 relative mt-2">
         {loading ? (
@@ -233,7 +262,34 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
           </div>
         ) : chartData ? (
           <ResponsiveContainer width="100%" height="100%">
-            {activeTab === "weekly" ? (
+            {activeTab === "today" ? (
+              <AreaChart data={chartData.todayStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorTodayCase" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.15}/>
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="colorTodayUpgrade" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.15}/>
+                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="hour" stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} />
+                <YAxis stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} unit="%" />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  labelStyle={labelStyle}
+                  itemStyle={itemStyle}
+                  formatter={(value: unknown, name: unknown) => {
+                    const label = name === "rtpCase" ? "RTP Кейсов" : name === "rtpUpgrade" ? "RTP Апгрейдов" : "Средний RTP";
+                    return [`${value}%`, label];
+                  }}
+                />
+                <Area type="monotone" connectNulls dataKey="rtpCase" stroke="#10b981" strokeWidth={1.5} fillOpacity={1} fill="url(#colorTodayCase)" name="rtpCase" />
+                <Area type="monotone" connectNulls dataKey="rtpUpgrade" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill="url(#colorTodayUpgrade)" name="rtpUpgrade" />
+                <ReferenceLine y={45} stroke="#3f3f46" strokeDasharray="3 3" />
+              </AreaChart>
+            ) : activeTab === "weekly" ? (
               <AreaChart data={chartData.weeklyStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorRtp" x1="0" y1="0" x2="0" y2="1">
@@ -329,7 +385,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
                   key={idx}
                   whileHover={{ scale: 1.01, y: -1 }}
                   whileTap={{ scale: 0.99 }}
-                  onClick={() => onSelectCase(caseItem)} // Передаем событие клика наверх в page.tsx!
+                  onClick={() => onSelectCase(caseItem)}
                   className="bg-zinc-900/30 hover:bg-zinc-900/60 border border-zinc-850 hover:border-zinc-700 p-3.5 rounded-2xl flex flex-col gap-2 cursor-pointer transition-all"
                 >
                   <div className="flex items-center justify-between gap-2">
