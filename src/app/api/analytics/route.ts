@@ -100,9 +100,12 @@ export async function GET(request: Request) {
         const spent = Number(log.spent);
         const won = Number(log.won);
         
-        if (log.type === "case") {
+        const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+        const isUpgrade = log.type === "upgrade" || log.type === "upgrades";
+
+        if (isCase) {
           userCasesCount += 1;
-        } else if (log.type === "upgrade") {
+        } else if (isUpgrade) {
           userUpgradesCount += 1;
         }
         userSpent += spent;
@@ -159,7 +162,7 @@ export async function GET(request: Request) {
     });
     const uniqueAuditorsCount = uniqueUsers.size;
 
-    // 4. СТАНДАРТНАЯ ФИЛЬТРАЦИЯ ГЛОБАЛЬНЫХ ЛОГОВ
+    // 4. СТАНДАРТНАЯ ФИЛЬТРАЦИЯ ГЛОБАЛЬНЫХ ЛОГОВ (Для построения сравнительного анализа)
     let filteredLogs = cachedLogs;
     if (caseFilter !== "") {
       filteredLogs = filteredLogs.filter(log => log.item_name === caseFilter);
@@ -194,27 +197,28 @@ export async function GET(request: Request) {
 
     const globalRtp = totalSpent > 0 ? Math.round((totalWon / totalSpent) * 100) : 0;
 
-    // Срез за сегодняшний календарный день (Резолюция по часам)
-    const today = new Date();
-    const todayYear = today.getFullYear();
-    const todayMonth = today.getMonth();
-    const todayDate = today.getDate();
+    // СКОЛЬЗЯЩИЙ СРЕЗ ЗА ПОСЛЕДНИЕ 24 ЧАСА (Устраняет пустые графики из-за таймзон)
+    const now = new Date();
+    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
     const todayLogs = filteredLogs.filter(log => {
       const logDate = new Date(log.created_at);
-      return logDate.getFullYear() === todayYear &&
-             logDate.getMonth() === todayMonth &&
-             logDate.getDate() === todayDate;
+      return logDate >= oneDayAgo;
     });
 
-    const todayHourlyMap: Record<number, {
+    const todayHourlyMap: Record<string, {
       spentAll: number; wonAll: number;
       spentCase: number; wonCase: number;
       spentUpgrade: number; wonUpgrade: number;
     }> = {};
 
-    for (let i = 0; i < 24; i++) {
-      todayHourlyMap[i] = {
+    // Генерируем хронологическую шкалу 24 часов в правильном порядке
+    const hoursList: string[] = [];
+    for (let i = 23; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 60 * 60 * 1000);
+      const hourLabel = `${String(d.getHours()).padStart(2, "0")}:00`;
+      hoursList.push(hourLabel);
+      todayHourlyMap[hourLabel] = {
         spentAll: 0, wonAll: 0,
         spentCase: 0, wonCase: 0,
         spentUpgrade: 0, wonUpgrade: 0
@@ -222,75 +226,114 @@ export async function GET(request: Request) {
     }
 
     todayLogs.forEach(log => {
-      const hour = new Date(log.created_at).getHours();
-      const spent = Number(log.spent);
-      const won = Number(log.won);
+      const logDate = new Date(log.created_at);
+      const hourLabel = `${String(logDate.getHours()).padStart(2, "0")}:00`;
+      
+      if (todayHourlyMap[hourLabel]) {
+        const spent = Number(log.spent);
+        const won = Number(log.won);
 
-      todayHourlyMap[hour].spentAll += spent;
-      todayHourlyMap[hour].wonAll += won;
+        todayHourlyMap[hourLabel].spentAll += spent;
+        todayHourlyMap[hourLabel].wonAll += won;
 
-      if (log.type === "case") {
-        todayHourlyMap[hour].spentCase += spent;
-        todayHourlyMap[hour].wonCase += won;
-      } else if (log.type === "upgrade") {
-        todayHourlyMap[hour].spentUpgrade += spent;
-        todayHourlyMap[hour].wonUpgrade += won;
+        const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+        const isUpgrade = log.type === "upgrade" || log.type === "upgrades";
+
+        if (isCase) {
+          todayHourlyMap[hourLabel].spentCase += spent;
+          todayHourlyMap[hourLabel].wonCase += won;
+        } else if (isUpgrade) {
+          todayHourlyMap[hourLabel].spentUpgrade += spent;
+          todayHourlyMap[hourLabel].wonUpgrade += won;
+        }
       }
     });
 
-    const todayStats = Object.entries(todayHourlyMap).map(([hour, data]) => ({
-      hour: `${hour.padStart(2, "0")}:00`,
-      rtp: data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0,
-      rtpCase: data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : null,
-      rtpUpgrade: data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : null
-    }));
+    const todayStats = hoursList.map(hourLabel => {
+      const data = todayHourlyMap[hourLabel];
+      return {
+        hour: hourLabel,
+        rtp: data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0,
+        rtpCase: data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0,
+        rtpUpgrade: data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : 0
+      };
+    });
 
-    // Вычисление интервальных срезов по 30 минут за сегодняшний день
+    // Расчет скользящих интервалов по 30 минут за последние 24 часа
     const intervalMap: Record<string, { spent: number; won: number }> = {};
-    for (let hour = 0; hour < 24; hour++) {
-      for (const min of [0, 30]) {
-        const label = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
-        intervalMap[label] = { spent: 0, won: 0 };
+    const intervalList: string[] = [];
+    
+    for (let i = 47; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 30 * 60 * 1000);
+      const minGroup = d.getMinutes() < 30 ? "00" : "30";
+      const label = `${String(d.getHours()).padStart(2, "0")}:${minGroup}`;
+      intervalMap[label] = { spent: 0, won: 0 };
+      if (!intervalList.includes(label)) {
+        intervalList.push(label);
       }
     }
 
     todayLogs.forEach(log => {
       const date = new Date(log.created_at);
-      const hour = date.getHours();
-      const minutes = date.getMinutes();
-      const minGroup = minutes < 30 ? 0 : 30;
-      const label = `${String(hour).padStart(2, "0")}:${String(minGroup).padStart(2, "0")}`;
+      const minGroup = date.getMinutes() < 30 ? "00" : "30";
+      const label = `${String(date.getHours()).padStart(2, "0")}:${minGroup}`;
       if (intervalMap[label]) {
         intervalMap[label].spent += Number(log.spent);
         intervalMap[label].won += Number(log.won);
       }
     });
 
-    const intervalStats = Object.entries(intervalMap).map(([interval, data]) => ({
-      interval,
-      rtp: data.spent > 0 ? Math.round((data.won / data.spent) * 100) : 0
+    const intervalStats = intervalList.map(label => ({
+      interval: label,
+      rtp: intervalMap[label].spent > 0 ? Math.round((intervalMap[label].won / intervalMap[label].spent) * 100) : 0
     }));
 
-    // Сводка по неделям
-    const weeklyMap = new Map<string, { spent: number; won: number }>();
+    // Сводка по неделям с разделением по типам операций
+    const weeklyMap = new Map<string, {
+      spentAll: number; wonAll: number;
+      spentCase: number; wonCase: number;
+      spentUpgrade: number; wonUpgrade: number;
+    }>();
+
     filteredLogs.forEach(log => {
       const dateStr = log.created_at.split("T")[0];
-      const current = weeklyMap.get(dateStr) || { spent: 0, won: 0 };
-      weeklyMap.set(dateStr, {
-        spent: current.spent + Number(log.spent),
-        won: current.won + Number(log.won)
-      });
+      const current = weeklyMap.get(dateStr) || {
+        spentAll: 0, wonAll: 0,
+        spentCase: 0, wonCase: 0,
+        spentUpgrade: 0, wonUpgrade: 0
+      };
+
+      const spent = Number(log.spent);
+      const won = Number(log.won);
+
+      current.spentAll += spent;
+      current.wonAll += won;
+
+      const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+      const isUpgrade = log.type === "upgrade" || log.type === "upgrades";
+
+      if (isCase) {
+        current.spentCase += spent;
+        current.wonCase += won;
+      } else if (isUpgrade) {
+        current.spentUpgrade += spent;
+        current.wonUpgrade += won;
+      }
+
+      weeklyMap.set(dateStr, current);
     });
 
     const weeklyStats = Array.from(weeklyMap.entries())
       .map(([date, data]) => ({
         day: date.split("-").slice(1).reverse().join("."),
-        rtp: data.spent > 0 ? Math.round((data.won / data.spent) * 100) : 0
+        rtp: data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0,
+        rtpCase: data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0,
+        rtpUpgrade: data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : 0
       }))
       .reverse()
       .slice(-7);
 
-    // Расчет циклической дневной статистики
+    // Расчет циклической недельной статистики (без изменений)
     const weekdayMap: Record<number, { spent: number; won: number; count: number }> = {
       1: { spent: 0, won: 0, count: 0 },
       2: { spent: 0, won: 0, count: 0 },
@@ -325,24 +368,50 @@ export async function GET(request: Request) {
       };
     });
 
-    // Почасовая статистика
-    const hourlyMap: Record<number, { spent: number; won: number }> = {};
+    // Расчет почасовой статистики за все время с разделением типов
+    const hourlyMap: Record<string, {
+      spentAll: number; wonAll: number;
+      spentCase: number; wonCase: number;
+      spentUpgrade: number; wonUpgrade: number;
+    }> = {};
+
     for (let i = 0; i < 24; i++) {
-      hourlyMap[i] = { spent: 0, won: 0 };
+      const label = `${String(i).padStart(2, "0")}:00`;
+      hourlyMap[label] = {
+        spentAll: 0, wonAll: 0,
+        spentCase: 0, wonCase: 0,
+        spentUpgrade: 0, wonUpgrade: 0
+      };
     }
 
     filteredLogs.forEach(log => {
       const date = new Date(log.created_at);
-      const hour = date.getHours();
-      if (hourlyMap[hour]) {
-        hourlyMap[hour].spent += Number(log.spent);
-        hourlyMap[hour].won += Number(log.won);
+      const hourLabel = `${String(date.getHours()).padStart(2, "0")}:00`;
+      const spent = Number(log.spent);
+      const won = Number(log.won);
+
+      if (hourlyMap[hourLabel]) {
+        hourlyMap[hourLabel].spentAll += spent;
+        hourlyMap[hourLabel].wonAll += won;
+
+        const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+        const isUpgrade = log.type === "upgrade" || log.type === "upgrades";
+
+        if (isCase) {
+          hourlyMap[hourLabel].spentCase += spent;
+          hourlyMap[hourLabel].wonCase += won;
+        } else if (isUpgrade) {
+          hourlyMap[hourLabel].spentUpgrade += spent;
+          hourlyMap[hourLabel].wonUpgrade += won;
+        }
       }
     });
 
-    const hourlyStats = Object.entries(hourlyMap).map(([hour, data]) => ({
-      hour: `${hour.padStart(2, "0")}:00`,
-      rtp: data.spent > 0 ? Math.round((data.won / data.spent) * 100) : 0
+    const hourlyStats = Object.entries(hourlyMap).map(([hourLabel, data]) => ({
+      hour: hourLabel,
+      rtp: data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0,
+      rtpCase: data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0,
+      rtpUpgrade: data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : 0
     }));
 
     const liveFeed = filteredLogs.slice(0, 15).map(log => ({
@@ -359,7 +428,8 @@ export async function GET(request: Request) {
 
     const caseMetrics: Record<string, { spent: number; won: number; count: number; site: string }> = {};
     filteredLogs.forEach(log => {
-      if (log.type === "case" && log.item_name !== "unknown") {
+      const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+      if (isCase && log.item_name !== "unknown") {
         if (!caseMetrics[log.item_name]) {
           caseMetrics[log.item_name] = { spent: 0, won: 0, count: 0, site: log.site };
         }
@@ -393,7 +463,7 @@ export async function GET(request: Request) {
       topCases,
       uniqueAuditors: uniqueAuditorsCount,
       todayStats,
-      intervalStats // Передаем на фронтенд расчет интервалов за сегодня
+      intervalStats
     });
 
   } catch (err) {

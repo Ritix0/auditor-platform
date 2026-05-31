@@ -18,9 +18,9 @@ interface CaseItem {
 }
 
 interface StatsData {
-  weeklyStats: { day: string; rtp: number }[];
+  weeklyStats: { day: string; rtp: number; rtpCase: number | null; rtpUpgrade: number | null }[];
   cyclicalStats: { name: string; rtp: number; info: string }[];
-  hourlyStats: { hour: string; rtp: number }[];
+  hourlyStats: { hour: string; rtp: number; rtpCase: number | null; rtpUpgrade: number | null }[];
   topCases: CaseItem[];
   todayStats: { hour: string; rtp: number; rtpCase: number | null; rtpUpgrade: number | null }[];
 }
@@ -46,10 +46,11 @@ const tabs = [
 const tooltipStyle = {
   background: "#18181b",
   border: "1px solid #27272a",
-  borderRadius: "8px",
+  borderRadius: "12px",
   fontSize: "11px",
   fontFamily: "var(--font-geist-mono)",
-  color: "#f4f4f5"
+  color: "#f4f4f5",
+  boxShadow: "0 10px 30px -10px rgba(0, 0, 0, 0.7)"
 };
 
 const labelStyle = {
@@ -106,12 +107,12 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
       const rtpList = chartData.todayStats.map(d => d.rtp).filter(r => r > 0);
       const avgRtp = rtpList.length > 0 ? rtpList.reduce((a, b) => a + b, 0) / rtpList.length : 0;
       if (avgRtp === 0) {
-        return "Сегодня еще не зарегистрировано достаточного объема транзакций для составления локального вердикта.";
+        return "В скользящих сутках не зафиксировано достаточного объема транзакций для составления локального вердикта.";
       }
       if (avgRtp < 45) {
-        return `Сегодняшний средний RTP составляет ${Math.round(avgRtp)}%. Фиксируется снижение отдачи алгоритмов относительно нормы в 45%.`;
+        return `Скользящий средний RTP составляет ${Math.round(avgRtp)}%. Фиксируется снижение отдачи алгоритмов относительно нормы в 45%.`;
       }
-      return `Сегодняшний средний RTP стабилен и составляет ${Math.round(avgRtp)}%. Системы работают в пределах стандартного математического ожидания.`;
+      return `Суточный показатель RTP стабилен и составляет ${Math.round(avgRtp)}%. Системы работают в пределах стандартного математического ожидания.`;
     }
     
     if (activeTab === "dayOfWeek") {
@@ -212,7 +213,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
 
       </div>
 
-      {/* ТАБ-НАВИГАЦИЯ ВРЕМЕННЫХ ИНТЕРВАЛОВ (ПРОКРУЧИВАЕМЫЙ КОНТЕЙНЕР) */}
+      {/* ТАБ-НАВИГАЦИЯ ВРЕМЕННЫХ ИНТЕРВАЛОВ */}
       <div className="overflow-x-auto scrollbar-none w-full bg-zinc-900/50 border border-zinc-800 p-1.5 rounded-xl" style={{ scrollbarWidth: "none" }}>
         <div className="flex gap-2 min-w-max md:w-full">
           {tabs.map((tab) => {
@@ -240,15 +241,15 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
         </div>
       </div>
 
-      {/* КАСТОМНАЯ ЛЕГЕНДА ДЛЯ ТАБА «СЕГОДНЯ» */}
-      {activeTab === "today" && (
+      {/* КАСТОМНАЯ ЛЕГЕНДА С КОРРЕКТНЫМИ ЦВЕТАМИ */}
+      {selectedType === "all" && (activeTab === "today" || activeTab === "weekly" || activeTab === "hourly") && (
         <div className="flex flex-wrap gap-4 items-center justify-center border-b border-zinc-900 pb-3 -mt-3 text-[9px] font-mono tracking-wider">
           <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            <span className="w-2.5 h-2.5 rounded bg-emerald-500" />
             <span className="text-zinc-400 uppercase">ОКУПАЕМОСТЬ КЕЙСОВ</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-rose-500" />
+            <span className="w-2.5 h-2.5 rounded bg-rose-500" />
             <span className="text-zinc-400 uppercase">ОКУПАЕМОСТЬ АПГРЕЙДОВ</span>
           </div>
         </div>
@@ -285,15 +286,27 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
                     return [`${value}%`, label];
                   }}
                 />
-                <Area type="monotone" connectNulls dataKey="rtpCase" stroke="#10b981" strokeWidth={1.5} fillOpacity={1} fill="url(#colorTodayCase)" name="rtpCase" />
-                <Area type="monotone" connectNulls dataKey="rtpUpgrade" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill="url(#colorTodayUpgrade)" name="rtpUpgrade" />
+                {selectedType === "all" ? (
+                  <>
+                    <Area type="monotone" connectNulls dataKey="rtpCase" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorTodayCase)" name="rtpCase" />
+                    <Area type="monotone" connectNulls dataKey="rtpUpgrade" stroke="#f43f5e" strokeWidth={2} fillOpacity={1} fill="url(#colorTodayUpgrade)" name="rtpUpgrade" />
+                  </>
+                ) : selectedType === "case" ? (
+                  <Area type="monotone" connectNulls dataKey="rtpCase" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorTodayCase)" name="rtpCase" />
+                ) : (
+                  <Area type="monotone" connectNulls dataKey="rtpUpgrade" stroke="#f43f5e" strokeWidth={2} fillOpacity={1} fill="url(#colorTodayUpgrade)" name="rtpUpgrade" />
+                )}
                 <ReferenceLine y={45} stroke="#3f3f46" strokeDasharray="3 3" />
               </AreaChart>
             ) : activeTab === "weekly" ? (
               <AreaChart data={chartData.weeklyStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
                 <defs>
-                  <linearGradient id="colorRtp" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.3}/>
+                  <linearGradient id="colorWeeklyCase" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.15}/>
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="colorWeeklyUpgrade" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.15}/>
                     <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
                   </linearGradient>
                 </defs>
@@ -303,10 +316,22 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
                   contentStyle={tooltipStyle}
                   labelStyle={labelStyle}
                   itemStyle={itemStyle}
-                  formatter={(value: unknown) => [`${value}%`, "RTP отдачи"]}
+                  formatter={(value: unknown, name: unknown) => {
+                    const label = name === "rtpCase" ? "RTP Кейсов" : name === "rtpUpgrade" ? "RTP Апгрейдов" : "Средний RTP";
+                    return [`${value}%`, label];
+                  }}
                 />
-                <Area type="monotone" dataKey="rtp" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill="url(#colorRtp)" />
-                <ReferenceLine y={45} stroke="#10b981" strokeDasharray="3 3" />
+                {selectedType === "all" ? (
+                  <>
+                    <Area type="monotone" connectNulls dataKey="rtpCase" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorWeeklyCase)" name="rtpCase" />
+                    <Area type="monotone" connectNulls dataKey="rtpUpgrade" stroke="#f43f5e" strokeWidth={2} fillOpacity={1} fill="url(#colorWeeklyUpgrade)" name="rtpUpgrade" />
+                  </>
+                ) : selectedType === "case" ? (
+                  <Area type="monotone" connectNulls dataKey="rtpCase" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorWeeklyCase)" name="rtpCase" />
+                ) : (
+                  <Area type="monotone" connectNulls dataKey="rtpUpgrade" stroke="#f43f5e" strokeWidth={2} fillOpacity={1} fill="url(#colorWeeklyUpgrade)" name="rtpUpgrade" />
+                )}
+                <ReferenceLine y={45} stroke="#3f3f46" strokeDasharray="3 3" />
               </AreaChart>
             ) : activeTab === "dayOfWeek" ? (
               <BarChart data={chartData.cyclicalStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
@@ -332,9 +357,13 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
             ) : (
               <AreaChart data={chartData.hourlyStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
                 <defs>
-                  <linearGradient id="colorHourly" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.25}/>
-                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                  <linearGradient id="colorHourlyCase" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.15}/>
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="colorHourlyUpgrade" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.15}/>
+                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="hour" stroke="#52525b" fontSize={9} fontFamily="var(--font-geist-mono)" tickLine={false} />
@@ -343,9 +372,21 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
                   contentStyle={tooltipStyle}
                   labelStyle={labelStyle}
                   itemStyle={itemStyle}
-                  formatter={(value: unknown) => [`${value}%`, "RTP в этот час"]}
+                  formatter={(value: unknown, name: unknown) => {
+                    const label = name === "rtpCase" ? "RTP Кейсов" : name === "rtpUpgrade" ? "RTP Апгрейдов" : "Средний RTP";
+                    return [`${value}%`, label];
+                  }}
                 />
-                <Area type="step" dataKey="rtp" stroke="#ef4444" strokeWidth={1.2} fillOpacity={1} fill="url(#colorHourly)" />
+                {selectedType === "all" ? (
+                  <>
+                    <Area type="step" connectNulls dataKey="rtpCase" stroke="#10b981" strokeWidth={1.5} fillOpacity={1} fill="url(#colorHourlyCase)" name="rtpCase" />
+                    <Area type="step" connectNulls dataKey="rtpUpgrade" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill="url(#colorHourlyUpgrade)" name="rtpUpgrade" />
+                  </>
+                ) : selectedType === "case" ? (
+                  <Area type="step" connectNulls dataKey="rtpCase" stroke="#10b981" strokeWidth={1.5} fillOpacity={1} fill="url(#colorHourlyCase)" name="rtpCase" />
+                ) : (
+                  <Area type="step" connectNulls dataKey="rtpUpgrade" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill="url(#colorHourlyUpgrade)" name="rtpUpgrade" />
+                )}
               </AreaChart>
             )}
           </ResponsiveContainer>
