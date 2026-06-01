@@ -26,7 +26,7 @@ interface StatsData {
 }
 
 interface CaseModalProps {
-  selectedCase: CaseItem;
+  selectedCase: CaseItem | null;
   onClose: () => void;
 }
 
@@ -62,6 +62,10 @@ export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
   const [caseModalData, setCaseModalData] = useState<StatsData | null>(null);
   const [loadingModal, setLoadingModal] = useState(true);
 
+  // КРИТИЧЕСКИЙ ЗАЩИТНЫЙ БАРЬЕР: Предотвращает краш во время анимации выхода AnimatePresence
+  if (!selectedCase) return null;
+
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   useEffect(() => {
     document.body.style.overflow = "hidden";
     return () => {
@@ -69,12 +73,14 @@ export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
     };
   }, []);
 
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   useEffect(() => {
     let active = true;
     const fetchCaseDetails = async () => {
       setLoadingModal(true);
       try {
-        const res = await fetch(`/api/analytics?case=${encodeURIComponent(selectedCase.name)}&site=${selectedCase.site}&type=case`);
+        const offset = new Date().getTimezoneOffset();
+        const res = await fetch(`/api/analytics?case=${encodeURIComponent(selectedCase.name)}&site=${selectedCase.site}&type=case&timezoneOffset=${offset}`);
         if (res.ok && active) {
           const json = await res.json();
           setCaseModalData({

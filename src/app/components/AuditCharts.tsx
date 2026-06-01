@@ -75,7 +75,8 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
     let active = true;
     const fetchChartData = async () => {
       try {
-        const res = await fetch(`/api/analytics?site=${selectedSite}&type=${selectedType}`);
+        const offset = new Date().getTimezoneOffset();
+        const res = await fetch(`/api/analytics?site=${selectedSite}&type=${selectedType}&timezoneOffset=${offset}`);
         if (res.ok && active) {
           const json = await res.json();
           setChartData({
@@ -104,13 +105,13 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
     if (!chartData) return "Ожидание данных...";
 
     if (activeTab === "today") {
-      const rtpList = chartData.todayStats.map(d => d.rtp).filter(r => r > 0);
+      const rtpList = chartData.todayStats.map(d => d.rtp).filter(r => r !== null && r > 0);
       const avgRtp = rtpList.length > 0 ? rtpList.reduce((a, b) => a + b, 0) / rtpList.length : 0;
       if (avgRtp === 0) {
         return "В скользящих сутках не зафиксировано достаточного объема транзакций для составления локального вердикта.";
       }
       if (avgRtp < 45) {
-        return `Скользящий средний RTP составляет ${Math.round(avgRtp)}%. Фиксируется снижение отдачи алгоритмов относительно нормы в 45%.`;
+        return `Скользящий средний RTP составляет ${Math.round(avgRtp)}%. Фиксируется снижение отдачи алгоритмов относительно нормы in 45%.`;
       }
       return `Суточный показатель RTP стабилен и составляет ${Math.round(avgRtp)}%. Системы работают в пределах стандартного математического ожидания.`;
     }
@@ -153,7 +154,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
   };
 
   return (
-    <div className="bg-zinc-950/40 border border-zinc-850 p-6 rounded-3xl liquid-glass flex flex-col gap-6 h-full">
+    <div className="bg-zinc-950/40 border border-zinc-850 p-6 rounded-4xl liquid-glass flex flex-col gap-6 h-full">
       
       {/* СЕЛЕКТОР ПЛОЩАДОК И ТИПА ОПЕРАЦИЙ */}
       <div className="flex flex-col gap-4 border-b border-zinc-850 pb-4">

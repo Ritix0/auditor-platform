@@ -51,6 +51,9 @@ export async function GET(request: Request) {
     const caseFilter = searchParams.get("case") || "";
     const typeFilter = searchParams.get("type") || "all";
     const userIdQuery = searchParams.get("user_id") || "";
+    
+    // Считываем смещение таймзоны клиента в минутах (например, -180 для Москвы)
+    const clientOffset = Number(searchParams.get("timezoneOffset") || "0");
 
     const nowTime = Date.now();
 
@@ -87,6 +90,12 @@ export async function GET(request: Request) {
       }
     }
 
+    // Вспомогательная функция для приведения даты UTC к локальной дате клиента на сервере
+    const getLocalDate = (createdAt: string) => {
+      const utcDate = new Date(createdAt);
+      return new Date(utcDate.getTime() - clientOffset * 60000);
+    };
+
     // 3. ОБРАБОТКА ПЕРСОНАЛЬНОГО ЗАПРОСА
     if (userIdQuery !== "") {
       const userLogs = cachedLogs.filter(log => log.user_id === userIdQuery);
@@ -116,7 +125,7 @@ export async function GET(request: Request) {
       
       const userRecent = userLogs.slice(0, 3).map(log => ({
         id: String(log.id),
-        timestamp: new Date(log.created_at).toLocaleTimeString("ru-RU", { hour12: false }),
+        timestamp: getLocalDate(log.created_at).toLocaleTimeString("ru-RU", { hour12: false }),
         site: log.site,
         caseName: log.type === "upgrade" ? "Апгрейд скина" : log.item_name,
         cost: Number(log.spent),
@@ -197,17 +206,18 @@ export async function GET(request: Request) {
 
     const globalRtp = totalSpent > 0 ? Math.round((totalWon / totalSpent) * 100) : 0;
 
-    // СРЕЗ СТРОГО ЗА СЕГОДНЯШНИЙ КАЛЕНДАРНЫЙ ДЕНЬ
-    const now = new Date();
-    const todayYear = now.getFullYear();
-    const todayMonth = now.getMonth();
-    const todayDate = now.getDate();
+    // Определение текущего времени в таймзоне клиента
+    const nowLocal = new Date(Date.now() - clientOffset * 60000);
+    const todayYear = nowLocal.getUTCFullYear();
+    const todayMonth = nowLocal.getUTCMonth();
+    const todayDate = nowLocal.getUTCDate();
 
+    // Фильтрация логов строго за сегодняшний календарный день клиента
     const todayLogs = filteredLogs.filter(log => {
-      const logDate = new Date(log.created_at);
-      return logDate.getFullYear() === todayYear &&
-             logDate.getMonth() === todayMonth &&
-             logDate.getDate() === todayDate;
+      const localLogDate = getLocalDate(log.created_at);
+      return localLogDate.getUTCFullYear() === todayYear &&
+             localLogDate.getUTCMonth() === todayMonth &&
+             localLogDate.getUTCDate() === todayDate;
     });
 
     const todayHourlyMap: Record<string, {
@@ -229,8 +239,8 @@ export async function GET(request: Request) {
     }
 
     todayLogs.forEach(log => {
-      const logDate = new Date(log.created_at);
-      const hourLabel = `${String(logDate.getHours()).padStart(2, "0")}:00`;
+      const localLogDate = getLocalDate(log.created_at);
+      const hourLabel = `${String(localLogDate.getUTCHours()).padStart(2, "0")}:00`;
       
       if (todayHourlyMap[hourLabel]) {
         const spent = Number(log.spent);
@@ -255,9 +265,9 @@ export async function GET(request: Request) {
     const todayStats = hoursList.map(hourLabel => {
       const data = todayHourlyMap[hourLabel];
       const hourNum = parseInt(hourLabel.split(":")[0], 10);
-      const currentHour = now.getHours();
+      const currentHour = nowLocal.getUTCHours();
 
-      // Маскируем будущие часы как null, чтобы график не уходил в бесконечный 0% в будущем
+      // Маскируем будущие часы таймзоны клиента как null, чтобы линия графика аккуратно обрывалась на текущем моменте
       const isFutureHour = hourNum > currentHour;
 
       return {
@@ -281,9 +291,9 @@ export async function GET(request: Request) {
     }
 
     todayLogs.forEach(log => {
-      const date = new Date(log.created_at);
-      const minGroup = date.getMinutes() < 30 ? "00" : "30";
-      const label = `${String(date.getHours()).padStart(2, "0")}:${minGroup}`;
+      const localLogDate = getLocalDate(log.created_at);
+      const minGroup = localLogDate.getUTCMinutes() < 30 ? "00" : "30";
+      const label = `${String(localLogDate.getUTCHours()).padStart(2, "0")}:${minGroup}`;
       if (intervalMap[label]) {
         intervalMap[label].spent += Number(log.spent);
         intervalMap[label].won += Number(log.won);
@@ -294,8 +304,8 @@ export async function GET(request: Request) {
       const [hourStr, minStr] = label.split(":");
       const hourNum = parseInt(hourStr, 10);
       const minNum = parseInt(minStr, 10);
-      const currentHour = now.getHours();
-      const currentMin = now.getMinutes();
+      const currentHour = nowLocal.getUTCHours();
+      const currentMin = nowLocal.getUTCMinutes();
 
       // Маскируем будущие 30-минутные интервалы
       const isFutureInterval = hourNum > currentHour || (hourNum === currentHour && minNum > currentMin);
@@ -307,7 +317,7 @@ export async function GET(request: Request) {
       };
     });
 
-    // Сводка по неделям
+    // Сводка по неделям в таймзоне клиента
     const weeklyMap = new Map<string, {
       spentAll: number; wonAll: number;
       spentCase: number; wonCase: number;
@@ -315,7 +325,9 @@ export async function GET(request: Request) {
     }>();
 
     filteredLogs.forEach(log => {
-      const dateStr = log.created_at.split("T")[0];
+      const localLogDate = getLocalDate(log.created_at);
+      const dateStr = `${localLogDate.getUTCFullYear()}-${String(localLogDate.getUTCMonth() + 1).padStart(2, "0")}-${String(localLogDate.getUTCDate()).padStart(2, "0")}`;
+      
       const current = weeklyMap.get(dateStr) || {
         spentAll: 0, wonAll: 0,
         spentCase: 0, wonCase: 0,
@@ -364,8 +376,8 @@ export async function GET(request: Request) {
     };
 
     filteredLogs.forEach(log => {
-      const date = new Date(log.created_at);
-      const day = date.getDay();
+      const localLogDate = getLocalDate(log.created_at);
+      const day = localLogDate.getUTCDay();
       if (weekdayMap[day] !== undefined) {
         weekdayMap[day].spent += Number(log.spent);
         weekdayMap[day].won += Number(log.won);
@@ -404,8 +416,8 @@ export async function GET(request: Request) {
     }
 
     filteredLogs.forEach(log => {
-      const date = new Date(log.created_at);
-      const hourLabel = `${String(date.getHours()).padStart(2, "0")}:00`;
+      const localLogDate = getLocalDate(log.created_at);
+      const hourLabel = `${String(localLogDate.getUTCHours()).padStart(2, "0")}:00`;
       const spent = Number(log.spent);
       const won = Number(log.won);
 
@@ -435,7 +447,7 @@ export async function GET(request: Request) {
 
     const liveFeed = filteredLogs.slice(0, 15).map(log => ({
       id: String(log.id),
-      timestamp: new Date(log.created_at).toLocaleTimeString("ru-RU", { hour12: false }),
+      timestamp: getLocalDate(log.created_at).toLocaleTimeString("ru-RU", { hour12: false }),
       user: log.user_id ? `ID: ${log.user_id}` : "Анонимный аудитор",
       site: log.site,
       caseName: log.type === "upgrade" ? "Апгрейд скина" : log.item_name,
