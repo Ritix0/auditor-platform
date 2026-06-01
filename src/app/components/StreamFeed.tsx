@@ -28,7 +28,7 @@ export default function StreamFeed() {
         const res = await fetch("/api/analytics");
         if (res.ok && active) {
           const json = await res.json();
-          const liveLogs: AuditLog[] = (json.liveFeed || []).slice(0, 10);
+          const liveLogs: AuditLog[] = (json.liveFeed || []).slice(0, 11);
           
           if (liveLogs.length > 0) {
             const newIds = liveLogs.map(l => l.id);

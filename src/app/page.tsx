@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { AnimatePresence } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import StreamFeed from "@/app/components/StreamFeed";
 import AuditCharts from "@/app/components/AuditCharts";
 import StrategySandbox from "@/app/components/StrategySandbox";
@@ -10,6 +10,7 @@ import PersonalStats from "@/app/components/PersonalStats";
 import CaseModal from "@/app/components/CaseModal";
 import Link from "next/link";
 import { Shield, Database, FileCode, UsersFour } from "@phosphor-icons/react";
+import Image from "next/image";
 
 interface CaseItem {
   name: string;
@@ -25,10 +26,27 @@ export default function Home() {
     totalAudited: number;
     globalRtp: number;
     siteVolume: Record<string, { count: number; spent: number; won: number }>;
-    uniqueAuditors: number; // Новое типизированное свойство
+    uniqueAuditors: number;
   } | null>(null);
 
   const [selectedCase, setSelectedCase] = useState<CaseItem | null>(null);
+  const [showFirstVisitWarning, setShowFirstVisitWarning] = useState(false);
+
+  // Определение первого входа на клиенте
+  useEffect(() => {
+    const dismissed = localStorage.getItem("caseaudit_warning_dismissed_v1.2");
+    if (!dismissed) {
+      const handle = requestAnimationFrame(() => {
+        setShowFirstVisitWarning(true);
+      });
+      return () => cancelAnimationFrame(handle);
+    }
+  }, []);
+
+  const dismissWarning = () => {
+    localStorage.setItem("caseaudit_warning_dismissed_v1.2", "true");
+    setShowFirstVisitWarning(false);
+  };
 
   useEffect(() => {
     let active = true;
@@ -41,7 +59,7 @@ export default function Home() {
             totalAudited: json.totalAudited,
             globalRtp: json.globalRtp,
             siteVolume: json.siteVolume,
-            uniqueAuditors: json.uniqueAuditors || 0 // Присвоение значения
+            uniqueAuditors: json.uniqueAuditors || 0
           });
         }
       } catch (err) {
@@ -68,10 +86,13 @@ export default function Home() {
       <header className="w-full max-w-350 mx-auto flex flex-col md:flex-row md:items-center justify-between gap-6 border-b border-zinc-850 pb-6 z-10">
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-3">
-            <img 
+            <Image 
               src="/logo.png" 
               alt="Народный Аудитор Кейсов" 
-              className="w-8 h-8 rounded-full border border-zinc-800 object-cover"
+              width={32}
+              height={32}
+              className="rounded-full border border-zinc-800 object-cover"
+              // Для сохранения логики скрытия при ошибке загрузки
               onError={(e) => {
                 e.currentTarget.style.display = 'none';
                 const pulseEl = e.currentTarget.nextElementSibling as HTMLElement;
@@ -112,7 +133,7 @@ export default function Home() {
       {/* Основная асимметричная сетка */}
       <div className="w-full max-w-350 mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 flex-1 z-10 items-stretch">
         
-        {/* ЛЕВАЯ КОЛОНКА (Интегрирован Личный кабинет) */}
+        {/* ЛЕВАЯ КОЛОНКА */}
         <div className="lg:col-span-4 flex flex-col gap-8 self-stretch">
           
           <div className="bg-zinc-950/60 border border-zinc-850 p-6 md:p-8 rounded-3xl liquid-glass flex flex-col gap-4">
@@ -148,7 +169,6 @@ export default function Home() {
           <PersonalStats />
 
           <div className="flex-1">
-            {/* Передаем реальное количество уникальных аудиторов в баннер */}
             <ExtensionBanner uniqueAuditors={dbData?.uniqueAuditors} />
           </div>
 
@@ -221,10 +241,81 @@ export default function Home() {
         </div>
       </footer>
 
-      {/* Безопасный вызов модалки */}
+      {/* Безопасный вызов модалки кейса */}
       <AnimatePresence>
         {selectedCase && (
           <CaseModal selectedCase={selectedCase} onClose={() => setSelectedCase(null)} />
+        )}
+      </AnimatePresence>
+
+      {/* Модальное окно дисклеймера при первом входе */}
+      {/* Модальное окно дисклеймера при первом входе (Fullscreen takeover аналогично CaseModal) */}
+      <AnimatePresence>
+        {showFirstVisitWarning && (
+          <div 
+            className="fixed inset-0 w-full h-full min-h-dvh bg-zinc-950/98 overflow-y-auto p-6 md:p-12 flex flex-col justify-center items-center"
+            style={{ zIndex: 9999999 }}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.98, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: 15 }}
+              transition={{ type: "spring", stiffness: 180, damping: 20 }}
+              // Жесткое ограничение ширины в обход CSS-классов:
+              style={{ maxWidth: "460px", width: "100%" }}
+              className="mx-auto flex flex-col gap-6 relative bg-zinc-900 border border-zinc-800 p-6 md:p-8 rounded-3xl liquid-glass shadow-2xl overflow-hidden"
+            >
+              <div className="absolute -right-12 -top-12 w-28 h-28 rounded-full bg-rose-500/10 blur-2xl pointer-events-none" />
+              
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center">
+                  <Shield className="w-5.5 h-5.5 text-rose-500" />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[9px] font-mono text-rose-400 uppercase tracking-widest font-bold">Система Предупреждения</span>
+                  <h3 className="text-base font-bold text-white uppercase tracking-tight font-mono">Важное уведомление для аудитора</h3>
+                </div>
+              </div>
+
+              <div className="text-zinc-300 text-xs leading-relaxed flex flex-col gap-4">
+                <p>
+                  Приветствуем в системе краудсорсингового мониторинга <strong className="text-white">«Народный Аудитор Кейсов»</strong>. Перед тем как приступить к анализу графиков и данных, пожалуйста, примите во внимание следующие факторы:
+                </p>
+
+                <div className="flex flex-col gap-3 bg-zinc-950/50 border border-zinc-850 p-3.5 rounded-2xl">
+                  <div className="flex items-start gap-2.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0 mt-1.5" />
+                    <p className="text-zinc-400">
+                      <strong className="text-zinc-200">Возможная неполнота данных:</strong> Если по какому-либо кейсу зафиксировано малое количество открытий, показатели окупаемости (RTP) могут временно отклоняться в сторону экстремального выигрыша или проигрыша. Всегда соотносите RTP с общим счетчиком логов.
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2.5 border-t border-zinc-900 pt-2.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0 mt-1.5" />
+                    <p className="text-zinc-400">
+                      <strong className="text-zinc-200">Математическая дисперсия:</strong> Алгоритмы сторонних сайтов динамически изменяют шансы в зависимости от времени суток и плотности трафика.
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2.5 border-t border-zinc-900 pt-2.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 mt-1.5" />
+                    <p className="text-zinc-400">
+                      <strong className="text-zinc-200">Конфиденциальность:</strong> Мы не собираем куки, пароли или Steam-сессии. Данные об открытиях отправляются полностью анонимизированно.
+                    </p>
+                  </div>
+                </div>
+
+                <p className="text-[11px] text-zinc-500">
+                  Портал предназначен исключительно для некоммерческого математического исследования. Информация не гарантирует повторения результатов на сторонних ресурсах.
+                </p>
+              </div>
+
+              <button
+                onClick={dismissWarning}
+                className="w-full py-3 bg-rose-500 hover:bg-rose-600 text-white font-mono font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all shadow-md shadow-rose-950/40 cursor-pointer active:scale-[0.98]"
+              >
+                <span>Я С ПОНИМАНИЕМ ОТНОШУСЬ К ДАННЫМ</span>
+              </button>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
 

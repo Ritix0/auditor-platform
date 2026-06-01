@@ -1,12 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { 
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, 
   BarChart, Bar, Cell, ReferenceLine
 } from "recharts";
-import { TrendUp, CalendarCheck, Clock, Warning, Sparkle } from "@phosphor-icons/react";
+import { TrendUp, CalendarCheck, Clock, Warning, Sparkle, CaretDown, CaretUp } from "@phosphor-icons/react";
 
 interface CaseItem {
   name: string;
@@ -39,6 +39,7 @@ interface StatsData {
   hourlyStats: { hour: string; rtp: number; rtpCase: number | null; rtpUpgrade: number | null }[];
   topCases: CaseItem[];
   todayStats: { hour: string; rtp: number | null; rtpCase: number | null; rtpUpgrade: number | null }[];
+  bestTodayCases: CaseItem[]; // Новое свойство для лучших суточных кейсов
 }
 
 interface AuditChartsProps {
@@ -85,15 +86,13 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
   const [selectedType, setSelectedType] = useState<"all" | "case" | "upgrade">("all");
   const [chartData, setChartData] = useState<StatsData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isMounted, setIsMounted] = useState(false); // Защитный барьер монтирования для Recharts
+  const [isMounted, setIsMounted] = useState(false);
 
-  // Канонический парсер даты БД в числовой таймстамп МСК (UTC+3) с ручным разбором на случай сбоев
   const parseDbDateToEpoch = (createdAt: string) => {
     if (!createdAt) return Date.now();
     const cleanStr = createdAt.replace(" ", "T");
     let localDate = new Date(cleanStr);
     
-    // Ручной разбор в случае NaN (например, на Safari)
     if (isNaN(localDate.getTime())) {
       const parts = createdAt.split(/[- :.T]/);
       if (parts.length >= 6) {
@@ -109,14 +108,17 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
     
     const browserOffsetMin = new Date().getTimezoneOffset();
     const mskOffsetMin = -180;
-    
     const diffMin = browserOffsetMin - mskOffsetMin;
     return localDate.getTime() - (diffMin * 60 * 1000);
   };
 
+  const [isBestCasesExpanded, setIsBestCasesExpanded] = useState(false);
+
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setIsMounted(true);
+    const handle = requestAnimationFrame(() => {
+      setIsMounted(true);
+    });
+    return () => cancelAnimationFrame(handle);
   }, []);
 
   useEffect(() => {
@@ -128,32 +130,35 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
           const json = await res.json();
           const rawLogs: LogEntry[] = json.rawLogs || [];
 
-          // 1. СЕГОДНЯ (Или последний активный день в СУБД)
+          // Оптимизация: разбор дат производится один раз для всех графиков
+          const parsed: ParsedLog[] = rawLogs
+            .map((l: LogEntry) => ({ 
+              ...l, 
+              epoch: parseDbDateToEpoch(l.created_at) 
+            }))
+            .filter((l: ParsedLog) => !isNaN(l.epoch));
+
+          if (parsed.length === 0) {
+            setChartData(null);
+            setLoading(false);
+            return;
+          }
+
+          // Поиск последнего активного дня в базе данных
+          const maxEpoch = Math.max(...parsed.map((l: ParsedLog) => l.epoch));
+          const targetDate = new Date(maxEpoch);
+          const tYear = targetDate.getFullYear();
+          const tMonth = targetDate.getMonth();
+          const tDay = targetDate.getDate();
+
+          // Выборка логов строго за этот день
+          const dayLogs = parsed.filter((l: ParsedLog) => {
+            const d = new Date(l.epoch);
+            return d.getFullYear() === tYear && d.getMonth() === tMonth && d.getDate() === tDay;
+          });
+
+          // 1. СЕГОДНЯ
           const getTodayStats = () => {
-            if (rawLogs.length === 0) return [];
-            
-            // Фильтруем битые даты (исключаем NaN)
-            const parsed: ParsedLog[] = rawLogs
-              .map((l: LogEntry) => ({ 
-                ...l, 
-                epoch: parseDbDateToEpoch(l.created_at) 
-              }))
-              .filter((l: ParsedLog) => !isNaN(l.epoch));
-
-            if (parsed.length === 0) return [];
-
-            const maxEpoch = Math.max(...parsed.map((l: ParsedLog) => l.epoch));
-            const targetDate = new Date(maxEpoch);
-            
-            const tYear = targetDate.getFullYear();
-            const tMonth = targetDate.getMonth();
-            const tDay = targetDate.getDate();
-
-            const dayLogs = parsed.filter((l: ParsedLog) => {
-              const d = new Date(l.epoch);
-              return d.getFullYear() === tYear && d.getMonth() === tMonth && d.getDate() === tDay;
-            });
-
             const hourlyMap: Record<string, { spentAll: number; wonAll: number; spentCase: number; wonCase: number; spentUpgrade: number; wonUpgrade: number }> = {};
             for (let i = 0; i < 24; i++) {
               const label = `${String(i).padStart(2, "0")}:00`;
@@ -190,7 +195,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
 
               return {
                 hour: hourLabel,
-                rtp: isFuture ? null : (data.spentAll > 0 ? Math.round((data.spentAll > 0 ? (data.wonAll / data.spentAll) * 100 : 0)) : 0),
+                rtp: isFuture ? null : (data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0),
                 rtpCase: isFuture ? null : (data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0),
                 rtpUpgrade: isFuture ? null : (data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : 0)
               };
@@ -199,24 +204,11 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
 
           // 2. НЕДЕЛЯ
           const getWeeklyStats = () => {
-            if (rawLogs.length === 0) return [];
-            const parsed: ParsedLog[] = rawLogs
-              .map((l: LogEntry) => ({ 
-                ...l, 
-                epoch: parseDbDateToEpoch(l.created_at) 
-              }))
-              .filter((l: ParsedLog) => !isNaN(l.epoch));
-
-            if (parsed.length === 0) return [];
-
-            const maxEpoch = Math.max(...parsed.map((l: ParsedLog) => l.epoch));
-            const latestDate = new Date(maxEpoch);
-
             const daysMap = new Map<string, { spentAll: number; wonAll: number; spentCase: number; wonCase: number; spentUpgrade: number; wonUpgrade: number }>();
             const daysList: string[] = [];
 
             for (let i = 6; i >= 0; i--) {
-              const d = new Date(latestDate.getTime() - i * 24 * 60 * 60 * 1000);
+              const d = new Date(targetDate.getTime() - i * 24 * 60 * 60 * 1000);
               const label = `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
               daysList.push(label);
               daysMap.set(label, { spentAll: 0, wonAll: 0, spentCase: 0, wonCase: 0, spentUpgrade: 0, wonUpgrade: 0 });
@@ -268,8 +260,8 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
               0: { spent: 0, won: 0 }
             };
 
-            rawLogs.forEach((log: LogEntry) => {
-              const d = new Date(parseDbDateToEpoch(log.created_at));
+            parsed.forEach((log: ParsedLog) => {
+              const d = new Date(log.epoch);
               const day = d.getDay();
               if (weekdayMap[day] !== undefined) {
                 weekdayMap[day].spent += Number(log.spent);
@@ -296,8 +288,8 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
               hourlyMap[label] = { spentAll: 0, wonAll: 0, spentCase: 0, wonCase: 0, spentUpgrade: 0, wonUpgrade: 0 };
             }
 
-            rawLogs.forEach((log: LogEntry) => {
-              const d = new Date(parseDbDateToEpoch(log.created_at));
+            parsed.forEach((log: ParsedLog) => {
+              const d = new Date(log.epoch);
               const hourLabel = `${String(d.getHours()).padStart(2, "0")}:00`;
               if (hourlyMap[hourLabel]) {
                 const spent = Number(log.spent);
@@ -328,7 +320,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
           // 5. ПОПУЛЯРНЫЕ КЕЙСЫ
           const getTopCases = () => {
             const caseMetrics: Record<string, { spent: number; won: number; count: number; site: string }> = {};
-            rawLogs.forEach((log: LogEntry) => {
+            parsed.forEach((log: ParsedLog) => {
               const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
               if (isCase && log.item_name !== "unknown") {
                 if (!caseMetrics[log.item_name]) {
@@ -353,12 +345,81 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
               .slice(0, 4);
           };
 
+          // 6. 3 ЛУЧШИХ КЕЙСА ЗА СЕГОДНЯ
+          // 6. 3 ЛУЧШИХ КЕЙСА ЗА СЕГОДНЯ (Ступенчатый отбор по количеству открытий и RTP)
+            const getBestTodayCases = () => {
+              if (parsed.length === 0) return [];
+
+              const maxEpoch = Math.max(...parsed.map((l: ParsedLog) => l.epoch));
+              const targetDate = new Date(maxEpoch);
+              
+              const tYear = targetDate.getFullYear();
+              const tMonth = targetDate.getMonth();
+              const tDay = targetDate.getDate();
+
+              const dayLogs = parsed.filter((l: ParsedLog) => {
+                const d = new Date(l.epoch);
+                return d.getFullYear() === tYear && d.getMonth() === tMonth && d.getDate() === tDay;
+              });
+
+              const dayCaseLogs = dayLogs.filter((log: ParsedLog) => {
+                const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+                return isCase && log.item_name !== "unknown";
+              });
+
+              const caseMetrics: Record<string, { spent: number; won: number; count: number; site: string }> = {};
+              dayCaseLogs.forEach((log: ParsedLog) => {
+                if (!caseMetrics[log.item_name]) {
+                  caseMetrics[log.item_name] = { spent: 0, won: 0, count: 0, site: log.site };
+                }
+                caseMetrics[log.item_name].spent += Number(log.spent);
+                caseMetrics[log.item_name].won += Number(log.won);
+                caseMetrics[log.item_name].count += 1;
+              });
+
+              const allTodayCases = Object.entries(caseMetrics).map(([name, data]) => ({
+                name,
+                site: data.site,
+                count: data.count,
+                spent: data.spent,
+                won: data.won,
+                rtp: Math.round((data.won / data.spent) * 100)
+              }));
+
+              if (allTodayCases.length === 0) return [];
+
+              // Массив ступеней выборки по количеству открытий (от большего к меньшему)
+              const tiers = [1200, 800, 500, 300, 100, 50, 10];
+              let selectedCases: typeof allTodayCases = [];
+
+              for (const tier of tiers) {
+                // Фильтруем кейсы, которые набрали этот порог открытий
+                const tierCases = allTodayCases.filter(c => c.count >= tier);
+                // Если кейсы в этой ступени есть и хотя бы у одного из них RTP >= 110%
+                if (tierCases.length > 0 && tierCases.some(c => c.rtp >= 110)) {
+                  selectedCases = tierCases;
+                  break; // Прерываем цикл, так как нашли максимально достоверную ступень
+                }
+              }
+
+              // Если ни одна ступень не подошла (мало логов или везде RTP < 110), берем все доступные кейсы за сегодня
+              if (selectedCases.length === 0) {
+                selectedCases = allTodayCases;
+              }
+
+              // Сортируем по RTP и забираем топ-3 лучших
+              return selectedCases
+                .sort((a, b) => b.rtp - a.rtp)
+                .slice(0, 3);
+            };
+
           setChartData({
             todayStats: getTodayStats(),
             weeklyStats: getWeeklyStats(),
             cyclicalStats: getCyclicalStats(),
             hourlyStats: getHourlyStats(),
-            topCases: getTopCases()
+            topCases: getTopCases(),
+            bestTodayCases: getBestTodayCases()
           });
         }
       } catch (err) {
@@ -432,8 +493,6 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
       
       {/* СЕЛЕКТОР ПЛОЩАДОК И ТИПА ОПЕРАЦИЙ */}
       <div className="flex flex-col gap-4 border-b border-zinc-850 pb-4">
-        
-        {/* Сайт-фильтр */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div className="flex flex-col gap-1.5">
             <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">АУДИТИРУЕМАЯ ПЛОЩАДКА</span>
@@ -462,7 +521,6 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
           </div>
         </div>
 
-        {/* Тип-фильтр */}
         <div className="flex flex-col gap-1.5 border-t border-zinc-900/80 pt-3">
           <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">ТИП АНАЛИЗИРУЕМЫХ ОПЕРАЦИЙ</span>
           <div className="flex gap-2">
@@ -485,7 +543,6 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
             ))}
           </div>
         </div>
-
       </div>
 
       {/* ТАБ-НАВИГАЦИЯ ВРЕМЕННЫХ ИНТЕРВАЛОВ */}
@@ -516,7 +573,6 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
         </div>
       </div>
 
-      {/* КАСТОМНАЯ ЛЕГЕНДА С КОРРЕКТНЫМИ ЦВЕТАМИ */}
       {selectedType === "all" && (activeTab === "today" || activeTab === "weekly" || activeTab === "hourly") && (
         <div className="flex flex-wrap gap-4 items-center justify-center border-b border-zinc-900 pb-3 -mt-3 text-[9px] font-mono tracking-wider">
           <div className="flex items-center gap-1.5">
@@ -530,8 +586,8 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
         </div>
       )}
 
-      {/* ТЕЛО ГРАФИКА (Стабильная высота h-[320px] во избежание коллапса ResponsiveContainer) */}
-      <div className="w-full h-[320px] relative mt-2">
+      {/* ТЕЛО ГРАФИКА */}
+      <div className="w-full h-60 relative mt-2">
         {loading || !isMounted ? (
           <div className="absolute inset-0 flex items-center justify-center font-mono text-xs text-zinc-500">
             Синхронизация шкал с базой данных...
@@ -679,6 +735,92 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
             <strong className="text-white">Телеметрия:</strong> {getGlobalVerdict()}
           </p>
         </div>
+      </div>
+
+      {/* НОВЫЙ БЛОК: 3 ЛУЧШИХ КЕЙСА ЗА СЕГОДНЯ */}
+      <div className="border-t border-zinc-850 pt-5 flex flex-col gap-3">
+        <div 
+          onClick={() => setIsBestCasesExpanded(!isBestCasesExpanded)}
+          className="flex items-center justify-between cursor-pointer select-none group"
+        >
+          <div className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-[10px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1">
+              3 лучших кейса за сегодня
+              {isBestCasesExpanded ? (
+                <CaretUp className="w-3 h-3 text-emerald-500" />
+              ) : (
+                <CaretDown className="w-3 h-3 text-emerald-500" />
+              )}
+            </span>
+          </div>
+          <span className="text-[9px] font-mono text-zinc-600 group-hover:text-zinc-400 transition-colors uppercase">
+            {isBestCasesExpanded ? "СВЕРНУТЬ" : "РАЗВЕРНУТЬ"}
+          </span>
+        </div>
+
+        <AnimatePresence initial={false}>
+          {isBestCasesExpanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2, ease: "easeInOut" }}
+              className="overflow-hidden"
+            >
+              {/* Строгая сетка на 3 горизонтальных элемента с уменьшенным gap */}
+              <div className="grid grid-cols-3 gap-2 pt-1">
+                {loading ? (
+                  <div className="col-span-3 text-center text-[10px] font-mono text-zinc-600 py-3">
+                    Расчет показателей...
+                  </div>
+                ) : chartData && chartData.bestTodayCases && chartData.bestTodayCases.length > 0 ? (
+                  chartData.bestTodayCases.map((caseItem, idx) => {
+                    const isHighRtp = caseItem.rtp >= 110; // Выделяем зеленым те, что вышли в плюс
+                    return (
+                      <motion.div
+                        key={`best-today-${idx}`}
+                        whileHover={{ scale: 1.01, y: -0.5 }}
+                        whileTap={{ scale: 0.99 }}
+                        onClick={() => onSelectCase(caseItem)}
+                        // Оптимальная высота 76px и внутренний отступ 2.5
+                        className="bg-emerald-950/5 hover:bg-emerald-950/10 border border-emerald-900/15 hover:border-emerald-500/30 p-2.5 rounded-xl flex flex-col justify-between h-[76px] cursor-pointer transition-all"
+                      >
+                        {/* Упорядоченная вертикальная шапка */}
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-[10px] font-bold text-zinc-200 truncate leading-tight" title={caseItem.name}>
+                            {caseItem.name}
+                          </span>
+                          <span className="text-[6.5px] font-mono font-bold text-emerald-400/80 uppercase tracking-wider mt-0.5">
+                            {caseItem.site}
+                          </span>
+                        </div>
+
+                        {/* Упорядоченный табличный блок метрик без наложений */}
+                        <div className="flex flex-col gap-0.5 border-t border-zinc-900/80 pt-1 font-mono text-[8.5px]">
+                          <div className="flex justify-between text-zinc-500 leading-none">
+                            <span>Открыто:</span>
+                            <span className="text-zinc-300 font-bold">{caseItem.count}</span>
+                          </div>
+                          <div className="flex justify-between leading-none">
+                            <span>RTP дня:</span>
+                            <span className={`font-black ${isHighRtp ? "text-emerald-400" : "text-zinc-300"}`}>
+                              {caseItem.rtp}%
+                            </span>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })
+                ) : (
+                  <div className="col-span-3 text-center text-[10px] font-mono text-zinc-600 py-3">
+                    Для расчета суточного топа требуется накопление логов за день.
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* ЖИВОЙ ТОП ПОПУЛЯРНЫХ КЕЙСОВ ИЗ БАЗЫ ДАННЫХ */}
