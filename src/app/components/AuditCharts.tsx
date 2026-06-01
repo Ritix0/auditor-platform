@@ -17,12 +17,28 @@ interface CaseItem {
   rtp: number;
 }
 
+interface LogEntry {
+  id: number;
+  created_at: string;
+  site: string;
+  type: string;
+  item_name: string;
+  spent: number;
+  won: number;
+  rtp: number;
+  user_id: string | null;
+}
+
+interface ParsedLog extends LogEntry {
+  epoch: number;
+}
+
 interface StatsData {
   weeklyStats: { day: string; rtp: number; rtpCase: number | null; rtpUpgrade: number | null }[];
   cyclicalStats: { name: string; rtp: number; info: string }[];
   hourlyStats: { hour: string; rtp: number; rtpCase: number | null; rtpUpgrade: number | null }[];
   topCases: CaseItem[];
-  todayStats: { hour: string; rtp: number; rtpCase: number | null; rtpUpgrade: number | null }[];
+  todayStats: { hour: string; rtp: number | null; rtpCase: number | null; rtpUpgrade: number | null }[];
 }
 
 interface AuditChartsProps {
@@ -67,24 +83,282 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
   const [activeTab, setActiveTab] = useState<"today" | "weekly" | "dayOfWeek" | "hourly">("today");
   const [selectedSite, setSelectedSite] = useState("all");
   const [selectedType, setSelectedType] = useState<"all" | "case" | "upgrade">("all");
-  
   const [chartData, setChartData] = useState<StatsData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isMounted, setIsMounted] = useState(false); // Защитный барьер монтирования для Recharts
+
+  // Канонический парсер даты БД в числовой таймстамп МСК (UTC+3) с ручным разбором на случай сбоев
+  const parseDbDateToEpoch = (createdAt: string) => {
+    if (!createdAt) return Date.now();
+    const cleanStr = createdAt.replace(" ", "T");
+    let localDate = new Date(cleanStr);
+    
+    // Ручной разбор в случае NaN (например, на Safari)
+    if (isNaN(localDate.getTime())) {
+      const parts = createdAt.split(/[- :.T]/);
+      if (parts.length >= 6) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const day = parseInt(parts[2], 10);
+        const hour = parseInt(parts[3], 10);
+        const minute = parseInt(parts[4], 10);
+        const second = parseInt(parts[5], 10);
+        localDate = new Date(year, month, day, hour, minute, second);
+      }
+    }
+    
+    const browserOffsetMin = new Date().getTimezoneOffset();
+    const mskOffsetMin = -180;
+    
+    const diffMin = browserOffsetMin - mskOffsetMin;
+    return localDate.getTime() - (diffMin * 60 * 1000);
+  };
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIsMounted(true);
+  }, []);
 
   useEffect(() => {
     let active = true;
     const fetchChartData = async () => {
       try {
-        const offset = new Date().getTimezoneOffset();
-        const res = await fetch(`/api/analytics?site=${selectedSite}&type=${selectedType}&timezoneOffset=${offset}`);
+        const res = await fetch(`/api/analytics?site=${selectedSite}&type=${selectedType}`);
         if (res.ok && active) {
           const json = await res.json();
+          const rawLogs: LogEntry[] = json.rawLogs || [];
+
+          // 1. СЕГОДНЯ (Или последний активный день в СУБД)
+          const getTodayStats = () => {
+            if (rawLogs.length === 0) return [];
+            
+            // Фильтруем битые даты (исключаем NaN)
+            const parsed: ParsedLog[] = rawLogs
+              .map((l: LogEntry) => ({ 
+                ...l, 
+                epoch: parseDbDateToEpoch(l.created_at) 
+              }))
+              .filter((l: ParsedLog) => !isNaN(l.epoch));
+
+            if (parsed.length === 0) return [];
+
+            const maxEpoch = Math.max(...parsed.map((l: ParsedLog) => l.epoch));
+            const targetDate = new Date(maxEpoch);
+            
+            const tYear = targetDate.getFullYear();
+            const tMonth = targetDate.getMonth();
+            const tDay = targetDate.getDate();
+
+            const dayLogs = parsed.filter((l: ParsedLog) => {
+              const d = new Date(l.epoch);
+              return d.getFullYear() === tYear && d.getMonth() === tMonth && d.getDate() === tDay;
+            });
+
+            const hourlyMap: Record<string, { spentAll: number; wonAll: number; spentCase: number; wonCase: number; spentUpgrade: number; wonUpgrade: number }> = {};
+            for (let i = 0; i < 24; i++) {
+              const label = `${String(i).padStart(2, "0")}:00`;
+              hourlyMap[label] = { spentAll: 0, wonAll: 0, spentCase: 0, wonCase: 0, spentUpgrade: 0, wonUpgrade: 0 };
+            }
+
+            dayLogs.forEach((log: ParsedLog) => {
+              const d = new Date(log.epoch);
+              const hourLabel = `${String(d.getHours()).padStart(2, "0")}:00`;
+              if (hourlyMap[hourLabel]) {
+                const spent = Number(log.spent);
+                const won = Number(log.won);
+                hourlyMap[hourLabel].spentAll += spent;
+                hourlyMap[hourLabel].wonAll += won;
+
+                const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+                const isUpgrade = log.type === "upgrade" || log.type === "upgrades";
+                if (isCase) {
+                  hourlyMap[hourLabel].spentCase += spent;
+                  hourlyMap[hourLabel].wonCase += won;
+                } else if (isUpgrade) {
+                  hourlyMap[hourLabel].spentUpgrade += spent;
+                  hourlyMap[hourLabel].wonUpgrade += won;
+                }
+              }
+            });
+
+            return Object.entries(hourlyMap).map(([hourLabel, data]) => {
+              const hourNum = parseInt(hourLabel.split(":")[0], 10);
+              const isFuture = tYear === new Date().getFullYear() && 
+                               tMonth === new Date().getMonth() && 
+                               tDay === new Date().getDate() && 
+                               hourNum > new Date().getHours();
+
+              return {
+                hour: hourLabel,
+                rtp: isFuture ? null : (data.spentAll > 0 ? Math.round((data.spentAll > 0 ? (data.wonAll / data.spentAll) * 100 : 0)) : 0),
+                rtpCase: isFuture ? null : (data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0),
+                rtpUpgrade: isFuture ? null : (data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : 0)
+              };
+            });
+          };
+
+          // 2. НЕДЕЛЯ
+          const getWeeklyStats = () => {
+            if (rawLogs.length === 0) return [];
+            const parsed: ParsedLog[] = rawLogs
+              .map((l: LogEntry) => ({ 
+                ...l, 
+                epoch: parseDbDateToEpoch(l.created_at) 
+              }))
+              .filter((l: ParsedLog) => !isNaN(l.epoch));
+
+            if (parsed.length === 0) return [];
+
+            const maxEpoch = Math.max(...parsed.map((l: ParsedLog) => l.epoch));
+            const latestDate = new Date(maxEpoch);
+
+            const daysMap = new Map<string, { spentAll: number; wonAll: number; spentCase: number; wonCase: number; spentUpgrade: number; wonUpgrade: number }>();
+            const daysList: string[] = [];
+
+            for (let i = 6; i >= 0; i--) {
+              const d = new Date(latestDate.getTime() - i * 24 * 60 * 60 * 1000);
+              const label = `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+              daysList.push(label);
+              daysMap.set(label, { spentAll: 0, wonAll: 0, spentCase: 0, wonCase: 0, spentUpgrade: 0, wonUpgrade: 0 });
+            }
+
+            parsed.forEach((log: ParsedLog) => {
+              const d = new Date(log.epoch);
+              const label = `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+              if (daysMap.has(label)) {
+                const current = daysMap.get(label)!;
+                const spent = Number(log.spent);
+                const won = Number(log.won);
+
+                current.spentAll += spent;
+                current.wonAll += won;
+
+                const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+                const isUpgrade = log.type === "upgrade" || log.type === "upgrades";
+                if (isCase) {
+                  current.spentCase += spent;
+                  current.wonCase += won;
+                } else if (isUpgrade) {
+                  current.spentUpgrade += spent;
+                  current.wonUpgrade += won;
+                }
+              }
+            });
+
+            return daysList.map(label => {
+              const data = daysMap.get(label)!;
+              return {
+                day: label,
+                rtp: data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0,
+                rtpCase: data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0,
+                rtpUpgrade: data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : 0
+              };
+            });
+          };
+
+          // 3. ПО ДНЯМ НЕДЕЛИ
+          const getCyclicalStats = () => {
+            const weekdayMap: Record<number, { spent: number; won: number }> = {
+              1: { spent: 0, won: 0 },
+              2: { spent: 0, won: 0 },
+              3: { spent: 0, won: 0 },
+              4: { spent: 0, won: 0 },
+              5: { spent: 0, won: 0 },
+              6: { spent: 0, won: 0 },
+              0: { spent: 0, won: 0 }
+            };
+
+            rawLogs.forEach((log: LogEntry) => {
+              const d = new Date(parseDbDateToEpoch(log.created_at));
+              const day = d.getDay();
+              if (weekdayMap[day] !== undefined) {
+                weekdayMap[day].spent += Number(log.spent);
+                weekdayMap[day].won += Number(log.won);
+              }
+            });
+
+            const weekdayNames = ["ВС", "ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ"];
+            return [1, 2, 3, 4, 5, 6, 0].map(dayNum => {
+              const data = weekdayMap[dayNum];
+              const rtp = data.spent > 0 ? Math.round((data.won / data.spent) * 100) : 0;
+              let info = "Норма";
+              if (dayNum === 5 || dayNum === 6 || dayNum === 0) info = "Снижение RTP";
+              if (rtp < 25) info = "Низкая окупаемость";
+              return { name: weekdayNames[dayNum], rtp, info };
+            });
+          };
+
+          // 4. ПО ЧАСАМ (За все время)
+          const getHourlyStats = () => {
+            const hourlyMap: Record<string, { spentAll: number; wonAll: number; spentCase: number; wonCase: number; spentUpgrade: number; wonUpgrade: number }> = {};
+            for (let i = 0; i < 24; i++) {
+              const label = `${String(i).padStart(2, "0")}:00`;
+              hourlyMap[label] = { spentAll: 0, wonAll: 0, spentCase: 0, wonCase: 0, spentUpgrade: 0, wonUpgrade: 0 };
+            }
+
+            rawLogs.forEach((log: LogEntry) => {
+              const d = new Date(parseDbDateToEpoch(log.created_at));
+              const hourLabel = `${String(d.getHours()).padStart(2, "0")}:00`;
+              if (hourlyMap[hourLabel]) {
+                const spent = Number(log.spent);
+                const won = Number(log.won);
+                hourlyMap[hourLabel].spentAll += spent;
+                hourlyMap[hourLabel].wonAll += won;
+
+                const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+                const isUpgrade = log.type === "upgrade" || log.type === "upgrades";
+                if (isCase) {
+                  hourlyMap[hourLabel].spentCase += spent;
+                  hourlyMap[hourLabel].wonCase += won;
+                } else if (isUpgrade) {
+                  hourlyMap[hourLabel].spentUpgrade += spent;
+                  hourlyMap[hourLabel].wonUpgrade += won;
+                }
+              }
+            });
+
+            return Object.entries(hourlyMap).map(([hourLabel, data]) => ({
+              hour: hourLabel,
+              rtp: data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0,
+              rtpCase: data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0,
+              rtpUpgrade: data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : 0
+            }));
+          };
+
+          // 5. ПОПУЛЯРНЫЕ КЕЙСЫ
+          const getTopCases = () => {
+            const caseMetrics: Record<string, { spent: number; won: number; count: number; site: string }> = {};
+            rawLogs.forEach((log: LogEntry) => {
+              const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+              if (isCase && log.item_name !== "unknown") {
+                if (!caseMetrics[log.item_name]) {
+                  caseMetrics[log.item_name] = { spent: 0, won: 0, count: 0, site: log.site };
+                }
+                caseMetrics[log.item_name].spent += Number(log.spent);
+                caseMetrics[log.item_name].won += Number(log.won);
+                caseMetrics[log.item_name].count += 1;
+              }
+            });
+
+            return Object.entries(caseMetrics)
+              .map(([name, data]) => ({
+                name,
+                site: data.site,
+                count: data.count,
+                spent: data.spent,
+                won: data.won,
+                rtp: Math.round((data.won / data.spent) * 100)
+              }))
+              .sort((a, b) => b.count - a.count)
+              .slice(0, 4);
+          };
+
           setChartData({
-            weeklyStats: json.weeklyStats || [],
-            cyclicalStats: json.cyclicalStats || [],
-            hourlyStats: json.hourlyStats || [],
-            topCases: json.topCases || [],
-            todayStats: json.todayStats || []
+            todayStats: getTodayStats(),
+            weeklyStats: getWeeklyStats(),
+            cyclicalStats: getCyclicalStats(),
+            hourlyStats: getHourlyStats(),
+            topCases: getTopCases()
           });
         }
       } catch (err) {
@@ -106,12 +380,12 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
 
     if (activeTab === "today") {
       const rtpList = chartData.todayStats.map(d => d.rtp).filter(r => r !== null && r > 0);
-      const avgRtp = rtpList.length > 0 ? rtpList.reduce((a, b) => a + b, 0) / rtpList.length : 0;
+      const avgRtp = rtpList.length > 0 ? rtpList.reduce<number>((a, b) => (a ?? 0) + (b ?? 0), 0) / rtpList.length : 0;
       if (avgRtp === 0) {
-        return "В скользящих сутках не зафиксировано достаточного объема транзакций для составления локального вердикта.";
+        return "В сутках последнего лога не зафиксировано достаточного объема транзакций для составления вердикта.";
       }
       if (avgRtp < 45) {
-        return `Скользящий средний RTP составляет ${Math.round(avgRtp)}%. Фиксируется снижение отдачи алгоритмов относительно нормы in 45%.`;
+        return `Средний RTP за день активности составляет ${Math.round(avgRtp)}%. Фиксируется снижение отдачи алгоритмов относительно нормы в 45%.`;
       }
       return `Суточный показатель RTP стабилен и составляет ${Math.round(avgRtp)}%. Системы работают в пределах стандартного математического ожидания.`;
     }
@@ -154,7 +428,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
   };
 
   return (
-    <div className="bg-zinc-950/40 border border-zinc-850 p-6 rounded-4xl liquid-glass flex flex-col gap-6 h-full">
+    <div className="bg-zinc-950/40 border border-zinc-850 p-6 rounded-3xl liquid-glass flex flex-col gap-6 h-full">
       
       {/* СЕЛЕКТОР ПЛОЩАДОК И ТИПА ОПЕРАЦИЙ */}
       <div className="flex flex-col gap-4 border-b border-zinc-850 pb-4">
@@ -256,14 +530,14 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
         </div>
       )}
 
-      {/* ТЕЛО ГРАФИКА */}
-      <div className="flex-1 min-h-55 relative mt-2">
-        {loading ? (
+      {/* ТЕЛО ГРАФИКА (Стабильная высота h-[320px] во избежание коллапса ResponsiveContainer) */}
+      <div className="w-full h-[320px] relative mt-2">
+        {loading || !isMounted ? (
           <div className="absolute inset-0 flex items-center justify-center font-mono text-xs text-zinc-500">
             Синхронизация шкал с базой данных...
           </div>
         ) : chartData ? (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={240} minWidth={0} minHeight={0}>
             {activeTab === "today" ? (
               <AreaChart data={chartData.todayStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
                 <defs>

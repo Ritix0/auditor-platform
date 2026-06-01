@@ -17,12 +17,28 @@ interface CaseItem {
   rtp: number;
 }
 
+interface LogEntry {
+  id: number;
+  created_at: string;
+  site: string;
+  type: string;
+  item_name: string;
+  spent: number;
+  won: number;
+  rtp: number;
+  user_id: string | null;
+}
+
+interface ParsedLog extends LogEntry {
+  epoch: number;
+}
+
 interface StatsData {
   weeklyStats: { day: string; rtp: number }[];
   cyclicalStats: { name: string; rtp: number; info: string }[];
   hourlyStats: { hour: string; rtp: number }[];
-  intervalStats: { interval: string; rtp: number }[];
-  todayStats: { hour: string; rtp: number; rtpCase: number | null; rtpUpgrade: number | null }[];
+  intervalStats: { interval: string; rtp: number | null }[];
+  todayStats: { hour: string; rtp: number | null; rtpCase: number | null; rtpUpgrade: number | null }[];
 }
 
 interface CaseModalProps {
@@ -65,6 +81,33 @@ export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
   // КРИТИЧЕСКИЙ ЗАЩИТНЫЙ БАРЬЕР: Предотвращает краш во время анимации выхода AnimatePresence
   if (!selectedCase) return null;
 
+  // Канонический парсер даты БД в числовой таймстамп МСК (UTC+3) с ручным разбором на случай сбоев
+  const parseDbDateToEpoch = (createdAt: string) => {
+    if (!createdAt) return Date.now();
+    const cleanStr = createdAt.replace(" ", "T");
+    let localDate = new Date(cleanStr);
+    
+    // Ручной разбор в случае NaN (например, на Safari)
+    if (isNaN(localDate.getTime())) {
+      const parts = createdAt.split(/[- :.T]/);
+      if (parts.length >= 6) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const day = parseInt(parts[2], 10);
+        const hour = parseInt(parts[3], 10);
+        const minute = parseInt(parts[4], 10);
+        const second = parseInt(parts[5], 10);
+        localDate = new Date(year, month, day, hour, minute, second);
+      }
+    }
+    
+    const browserOffsetMin = new Date().getTimezoneOffset(); // -180 для МСК
+    const mskOffsetMin = -180; // МСК в БД всегда -180 минут относительно UTC
+    
+    const diffMin = browserOffsetMin - mskOffsetMin;
+    return localDate.getTime() - (diffMin * 60 * 1000);
+  };
+
   // eslint-disable-next-line react-hooks/rules-of-hooks
   useEffect(() => {
     document.body.style.overflow = "hidden";
@@ -79,16 +122,243 @@ export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
     const fetchCaseDetails = async () => {
       setLoadingModal(true);
       try {
-        const offset = new Date().getTimezoneOffset();
-        const res = await fetch(`/api/analytics?case=${encodeURIComponent(selectedCase.name)}&site=${selectedCase.site}&type=case&timezoneOffset=${offset}`);
+        const res = await fetch(`/api/analytics?case=${encodeURIComponent(selectedCase.name)}&site=${selectedCase.site}&type=case`);
         if (res.ok && active) {
           const json = await res.json();
+          const rawLogs: LogEntry[] = json.rawLogs || [];
+
+          // ВЫЧИСЛЕНИЯ НА СТОРОНЕ КЛИЕНТА (Для модального окна конкретного кейса)
+
+          // 1. СЕГОДНЯ
+          const getTodayStats = () => {
+            if (rawLogs.length === 0) return [];
+            
+            // Фильтруем битые даты (исключаем NaN)
+            const parsed: ParsedLog[] = rawLogs
+              .map((l: LogEntry) => ({ 
+                ...l, 
+                epoch: parseDbDateToEpoch(l.created_at) 
+              }))
+              .filter((l: ParsedLog) => !isNaN(l.epoch));
+
+            if (parsed.length === 0) return [];
+
+            const maxEpoch = Math.max(...parsed.map((l: ParsedLog) => l.epoch));
+            const targetDate = new Date(maxEpoch);
+            
+            const tYear = targetDate.getFullYear();
+            const tMonth = targetDate.getMonth();
+            const tDay = targetDate.getDate();
+
+            const dayLogs = parsed.filter((l: ParsedLog) => {
+              const d = new Date(l.epoch);
+              return d.getFullYear() === tYear && d.getMonth() === tMonth && d.getDate() === tDay;
+            });
+
+            const hourlyMap: Record<string, { spentAll: number; wonAll: number; spentCase: number; wonCase: number; spentUpgrade: number; wonUpgrade: number }> = {};
+            for (let i = 0; i < 24; i++) {
+              const label = `${String(i).padStart(2, "0")}:00`;
+              hourlyMap[label] = { spentAll: 0, wonAll: 0, spentCase: 0, wonCase: 0, spentUpgrade: 0, wonUpgrade: 0 };
+            }
+
+            dayLogs.forEach((log: ParsedLog) => {
+              const d = new Date(log.epoch);
+              const hourLabel = `${String(d.getHours()).padStart(2, "0")}:00`;
+              if (hourlyMap[hourLabel]) {
+                const spent = Number(log.spent);
+                const won = Number(log.won);
+                hourlyMap[hourLabel].spentAll += spent;
+                hourlyMap[hourLabel].wonAll += won;
+                hourlyMap[hourLabel].spentCase += spent;
+                hourlyMap[hourLabel].wonCase += won;
+              }
+            });
+
+            return Object.entries(hourlyMap).map(([hourLabel, data]) => {
+              const hourNum = parseInt(hourLabel.split(":")[0], 10);
+              const isFuture = tYear === new Date().getFullYear() && 
+                               tMonth === new Date().getMonth() && 
+                               tDay === new Date().getDate() && 
+                               hourNum > new Date().getHours();
+
+              return {
+                hour: hourLabel,
+                rtp: isFuture ? null : (data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0),
+                rtpCase: isFuture ? null : (data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0),
+                rtpUpgrade: isFuture ? null : 0
+              };
+            });
+          };
+
+          // 2. ИНТЕРВАЛЫ ПО 30 МИНУТ
+          const getIntervalStats = () => {
+            if (rawLogs.length === 0) return [];
+            
+            const parsed: ParsedLog[] = rawLogs
+              .map((l: LogEntry) => ({ 
+                ...l, 
+                epoch: parseDbDateToEpoch(l.created_at) 
+              }))
+              .filter((l: ParsedLog) => !isNaN(l.epoch));
+
+            if (parsed.length === 0) return [];
+
+            const maxEpoch = Math.max(...parsed.map((l: ParsedLog) => l.epoch));
+            const targetDate = new Date(maxEpoch);
+            
+            const tYear = targetDate.getFullYear();
+            const tMonth = targetDate.getMonth();
+            const tDay = targetDate.getDate();
+
+            const dayLogs = parsed.filter((l: ParsedLog) => {
+              const d = new Date(l.epoch);
+              return d.getFullYear() === tYear && d.getMonth() === tMonth && d.getDate() === tDay;
+            });
+
+            const intervalMap: Record<string, { spent: number; won: number }> = {};
+            const intervalList: string[] = [];
+            
+            for (let hour = 0; hour < 24; hour++) {
+              for (const min of [0, 30]) {
+                const label = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+                intervalMap[label] = { spent: 0, won: 0 };
+                intervalList.push(label);
+              }
+            }
+
+            dayLogs.forEach((log: ParsedLog) => {
+              const d = new Date(log.epoch);
+              const minGroup = d.getMinutes() < 30 ? "00" : "30";
+              const label = `${String(d.getHours()).padStart(2, "0")}:${minGroup}`;
+              if (intervalMap[label]) {
+                intervalMap[label].spent += Number(log.spent);
+                intervalMap[label].won += Number(log.won);
+              }
+            });
+
+            return intervalList.map(label => {
+              const [hourStr, minStr] = label.split(":");
+              const hourNum = parseInt(hourStr, 10);
+              const minNum = parseInt(minStr, 10);
+              
+              const isFuture = tYear === new Date().getFullYear() && 
+                               tMonth === new Date().getMonth() && 
+                               tDay === new Date().getDate() && 
+                               (hourNum > new Date().getHours() || (hourNum === new Date().getHours() && minNum > new Date().getMinutes()));
+
+              const data = intervalMap[label];
+              return {
+                interval: label,
+                rtp: isFuture ? null : (data.spent > 0 ? Math.round((data.won / data.spent) * 100) : 0)
+              };
+            });
+          };
+
+          // 3. НЕДЕЛЯ
+          const getWeeklyStats = () => {
+            if (rawLogs.length === 0) return [];
+            const parsed: ParsedLog[] = rawLogs
+              .map((l: LogEntry) => ({ 
+                ...l, 
+                epoch: parseDbDateToEpoch(l.created_at) 
+              }))
+              .filter((l: ParsedLog) => !isNaN(l.epoch));
+
+            if (parsed.length === 0) return [];
+
+            const maxEpoch = Math.max(...parsed.map((l: ParsedLog) => l.epoch));
+            const latestDate = new Date(maxEpoch);
+
+            const daysMap = new Map<string, { spent: number; won: number }>();
+            const daysList: string[] = [];
+
+            for (let i = 6; i >= 0; i--) {
+              const d = new Date(latestDate.getTime() - i * 24 * 60 * 60 * 1000);
+              const label = `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+              daysList.push(label);
+              daysMap.set(label, { spent: 0, won: 0 });
+            }
+
+            parsed.forEach((log: ParsedLog) => {
+              const d = new Date(log.epoch);
+              const label = `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+              if (daysMap.has(label)) {
+                const current = daysMap.get(label)!;
+                current.spent += Number(log.spent);
+                current.won += Number(log.won);
+              }
+            });
+
+            return daysList.map(label => {
+              const data = daysMap.get(label)!;
+              return {
+                day: label,
+                rtp: data.spent > 0 ? Math.round((data.won / data.spent) * 100) : 0
+              };
+            });
+          };
+
+          // 4. ПО ДНЯМ НЕДЕЛИ
+          const getCyclicalStats = () => {
+            const weekdayMap: Record<number, { spent: number; won: number }> = {
+              1: { spent: 0, won: 0 },
+              2: { spent: 0, won: 0 },
+              3: { spent: 0, won: 0 },
+              4: { spent: 0, won: 0 },
+              5: { spent: 0, won: 0 },
+              6: { spent: 0, won: 0 },
+              0: { spent: 0, won: 0 }
+            };
+
+            rawLogs.forEach((log: LogEntry) => {
+              const d = new Date(parseDbDateToEpoch(log.created_at));
+              const day = d.getDay();
+              if (weekdayMap[day] !== undefined) {
+                weekdayMap[day].spent += Number(log.spent);
+                weekdayMap[day].won += Number(log.won);
+              }
+            });
+
+            const weekdayNames = ["ВС", "ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ"];
+            return [1, 2, 3, 4, 5, 6, 0].map(dayNum => {
+              const data = weekdayMap[dayNum];
+              const rtp = data.spent > 0 ? Math.round((data.won / data.spent) * 100) : 0;
+              let info = "Норма";
+              if (dayNum === 5 || dayNum === 6 || dayNum === 0) info = "Снижение RTP";
+              if (rtp < 25) info = "Низкая окупаемость";
+              return { name: weekdayNames[dayNum], rtp, info };
+            });
+          };
+
+          // 5. ПО ЧАСАМ (Все время)
+          const getHourlyStats = () => {
+            const hourlyMap: Record<string, { spent: number; won: number }> = {};
+            for (let i = 0; i < 24; i++) {
+              const label = `${String(i).padStart(2, "0")}:00`;
+              hourlyMap[label] = { spent: 0, won: 0 };
+            }
+
+            rawLogs.forEach((log: LogEntry) => {
+              const d = new Date(parseDbDateToEpoch(log.created_at));
+              const hourLabel = `${String(d.getHours()).padStart(2, "0")}:00`;
+              if (hourlyMap[hourLabel]) {
+                hourlyMap[hourLabel].spent += Number(log.spent);
+                hourlyMap[hourLabel].won += Number(log.won);
+              }
+            });
+
+            return Object.entries(hourlyMap).map(([hourLabel, data]) => ({
+              hour: hourLabel,
+              rtp: data.spent > 0 ? Math.round((data.won / data.spent) * 100) : 0
+            }));
+          };
+
           setCaseModalData({
-            weeklyStats: json.weeklyStats || [],
-            cyclicalStats: json.cyclicalStats || [],
-            hourlyStats: json.hourlyStats || [],
-            intervalStats: json.intervalStats || [],
-            todayStats: json.todayStats || []
+            todayStats: getTodayStats(),
+            intervalStats: getIntervalStats(),
+            weeklyStats: getWeeklyStats(),
+            cyclicalStats: getCyclicalStats(),
+            hourlyStats: getHourlyStats()
           });
         }
       } catch (err) {
@@ -149,7 +419,7 @@ export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
     if (hourDiff > 5) {
       hourlyVerdict = `Зафиксирован ночной подъем окупаемости: с 00:00 до 06:00 RTP в среднем на ${hourDiff}% выше, чем в дневные часы.`;
     } else if (hourDiff < -5) {
-      hourlyVerdict = `В дневное время RTP в среднем на ${Math.abs(hourDiff)}% выше, чем в ночные часы.`;
+      weekendVerdict = `В дневное время RTP в среднем на ${Math.abs(hourDiff)}% выше, чем в ночные часы.`;
     }
 
     return {
@@ -164,13 +434,16 @@ export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
   const analysis = caseModalData ? generateAnalysis(selectedCase, caseModalData) : null;
 
   return (
-    <div className="fixed inset-0 w-full h-full min-h-[100dvh] bg-zinc-950/98 z-[999999] overflow-y-auto p-8 md:p-12 flex flex-col gap-8">
+    <div 
+      className="fixed inset-0 w-full h-full min-h-dvh bg-zinc-950/98 overflow-y-auto p-8 md:p-12 flex flex-col gap-8"
+      style={{ zIndex: 999999 }}
+    >
       <motion.div
         initial={{ opacity: 0, scale: 0.98, y: 15 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.98, y: 15 }}
         transition={{ type: "spring", stiffness: 180, damping: 20 }}
-        className="w-full max-w-[1300px] mx-auto flex flex-col gap-8 h-full relative"
+        className="w-full max-w-325 mx-auto flex flex-col gap-8 h-full relative"
       >
         
         {/* Кнопка закрытия модалки */}
@@ -298,9 +571,9 @@ export default function CaseModal({ selectedCase, onClose }: CaseModalProps) {
               </div>
 
               {/* ПАНЕЛЬ АКТИВНОГО ГРАФИКА */}
-              <div className="flex-1 border border-zinc-850 p-6 rounded-2xl bg-zinc-900/20 min-h-100 flex flex-col gap-3">
-                <div className="flex-1 relative">
-                  <ResponsiveContainer width="100%" height="100%">
+              <div className="flex-1 border border-zinc-850 p-6 rounded-2xl bg-zinc-900/20 h-[380px] flex flex-col gap-3">
+                <div className="w-full h-full relative">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                     {activeModalTab === "today" ? (
                       <AreaChart data={caseModalData.todayStats} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
                         <defs>
