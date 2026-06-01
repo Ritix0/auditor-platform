@@ -162,7 +162,7 @@ export async function GET(request: Request) {
     });
     const uniqueAuditorsCount = uniqueUsers.size;
 
-    // 4. СТАНДАРТНАЯ ФИЛЬТРАЦИЯ ГЛОБАЛЬНЫХ ЛОГОВ (Для построения сравнительного анализа)
+    // 4. СТАНДАРТНАЯ ФИЛЬТРАЦИЯ ГЛОБАЛЬНЫХ ЛОГОВ
     let filteredLogs = cachedLogs;
     if (caseFilter !== "") {
       filteredLogs = filteredLogs.filter(log => log.item_name === caseFilter);
@@ -197,13 +197,17 @@ export async function GET(request: Request) {
 
     const globalRtp = totalSpent > 0 ? Math.round((totalWon / totalSpent) * 100) : 0;
 
-    // СКОЛЬЗЯЩИЙ СРЕЗ ЗА ПОСЛЕДНИЕ 24 ЧАСА (Устраняет пустые графики из-за таймзон)
+    // СРЕЗ СТРОГО ЗА СЕГОДНЯШНИЙ КАЛЕНДАРНЫЙ ДЕНЬ
     const now = new Date();
-    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const todayYear = now.getFullYear();
+    const todayMonth = now.getMonth();
+    const todayDate = now.getDate();
 
     const todayLogs = filteredLogs.filter(log => {
       const logDate = new Date(log.created_at);
-      return logDate >= oneDayAgo;
+      return logDate.getFullYear() === todayYear &&
+             logDate.getMonth() === todayMonth &&
+             logDate.getDate() === todayDate;
     });
 
     const todayHourlyMap: Record<string, {
@@ -212,11 +216,10 @@ export async function GET(request: Request) {
       spentUpgrade: number; wonUpgrade: number;
     }> = {};
 
-    // Генерируем хронологическую шкалу 24 часов в правильном порядке
+    // Генерируем полную суточную шкалу от 00:00 до 23:00 для текущего дня
     const hoursList: string[] = [];
-    for (let i = 23; i >= 0; i--) {
-      const d = new Date(now.getTime() - i * 60 * 60 * 1000);
-      const hourLabel = `${String(d.getHours()).padStart(2, "0")}:00`;
+    for (let i = 0; i < 24; i++) {
+      const hourLabel = `${String(i).padStart(2, "0")}:00`;
       hoursList.push(hourLabel);
       todayHourlyMap[hourLabel] = {
         spentAll: 0, wonAll: 0,
@@ -251,24 +254,28 @@ export async function GET(request: Request) {
 
     const todayStats = hoursList.map(hourLabel => {
       const data = todayHourlyMap[hourLabel];
+      const hourNum = parseInt(hourLabel.split(":")[0], 10);
+      const currentHour = now.getHours();
+
+      // Маскируем будущие часы как null, чтобы график не уходил в бесконечный 0% в будущем
+      const isFutureHour = hourNum > currentHour;
+
       return {
         hour: hourLabel,
-        rtp: data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0,
-        rtpCase: data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0,
-        rtpUpgrade: data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : 0
+        rtp: isFutureHour ? null : (data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0),
+        rtpCase: isFutureHour ? null : (data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0),
+        rtpUpgrade: isFutureHour ? null : (data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : 0)
       };
     });
 
-    // Расчет скользящих интервалов по 30 минут за последние 24 часа
+    // Вычисление интервальных срезов по 30 минут за сегодняшний день
     const intervalMap: Record<string, { spent: number; won: number }> = {};
     const intervalList: string[] = [];
     
-    for (let i = 47; i >= 0; i--) {
-      const d = new Date(now.getTime() - i * 30 * 60 * 1000);
-      const minGroup = d.getMinutes() < 30 ? "00" : "30";
-      const label = `${String(d.getHours()).padStart(2, "0")}:${minGroup}`;
-      intervalMap[label] = { spent: 0, won: 0 };
-      if (!intervalList.includes(label)) {
+    for (let hour = 0; hour < 24; hour++) {
+      for (const min of [0, 30]) {
+        const label = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+        intervalMap[label] = { spent: 0, won: 0 };
         intervalList.push(label);
       }
     }
@@ -283,12 +290,24 @@ export async function GET(request: Request) {
       }
     });
 
-    const intervalStats = intervalList.map(label => ({
-      interval: label,
-      rtp: intervalMap[label].spent > 0 ? Math.round((intervalMap[label].won / intervalMap[label].spent) * 100) : 0
-    }));
+    const intervalStats = intervalList.map(label => {
+      const [hourStr, minStr] = label.split(":");
+      const hourNum = parseInt(hourStr, 10);
+      const minNum = parseInt(minStr, 10);
+      const currentHour = now.getHours();
+      const currentMin = now.getMinutes();
 
-    // Сводка по неделям с разделением по типам операций
+      // Маскируем будущие 30-минутные интервалы
+      const isFutureInterval = hourNum > currentHour || (hourNum === currentHour && minNum > currentMin);
+
+      const data = intervalMap[label];
+      return {
+        interval: label,
+        rtp: isFutureInterval ? null : (data.spent > 0 ? Math.round((data.won / data.spent) * 100) : 0)
+      };
+    });
+
+    // Сводка по неделям
     const weeklyMap = new Map<string, {
       spentAll: number; wonAll: number;
       spentCase: number; wonCase: number;
@@ -333,7 +352,7 @@ export async function GET(request: Request) {
       .reverse()
       .slice(-7);
 
-    // Расчет циклической недельной статистики (без изменений)
+    // Расчет циклической дневной статистики
     const weekdayMap: Record<number, { spent: number; won: number; count: number }> = {
       1: { spent: 0, won: 0, count: 0 },
       2: { spent: 0, won: 0, count: 0 },
@@ -368,7 +387,7 @@ export async function GET(request: Request) {
       };
     });
 
-    // Расчет почасовой статистики за все время с разделением типов
+    // Почасовая статистика за все время
     const hourlyMap: Record<string, {
       spentAll: number; wonAll: number;
       spentCase: number; wonCase: number;
