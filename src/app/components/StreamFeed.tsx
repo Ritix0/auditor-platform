@@ -141,7 +141,7 @@ export default function StreamFeed() {
           <span className="text-emerald-400 font-bold uppercase tracking-wider animate-pulse">ОТЛИЧНАЯ</span>
         </div>
         <div className="flex justify-between text-zinc-500">
-          <span>ЛИЧНЫХ ЛОГОВ В ЛЕНТЕ:</span>
+          <span>ЛОГОВ В ЛЕНТЕ:</span>
           <span className="text-zinc-300 font-bold">
             {logs.filter(l => l.user.startsWith("ID:")).length}
           </span>

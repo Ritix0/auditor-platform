@@ -158,48 +158,48 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
 
           // 1. СЕГОДНЯ (При отсутствии трат возвращаем null)
           const getTodayStats = () => {
-          const hourlyMap: Record<string, { spentAll: number; wonAll: number; spentCase: number; wonCase: number; spentUpgrade: number; wonUpgrade: number }> = {};
-          for (let i = 0; i < 24; i++) {
-            const label = `${String(i).padStart(2, "0")}:00`;
-            hourlyMap[label] = { spentAll: 0, wonAll: 0, spentCase: 0, wonCase: 0, spentUpgrade: 0, wonUpgrade: 0 };
-          }
-
-          dayLogs.forEach((log: ParsedLog) => {
-            const d = new Date(log.epoch);
-            const hourLabel = `${String(d.getHours()).padStart(2, "0")}:00`;
-            if (hourlyMap[hourLabel]) {
-              const spent = Number(log.spent);
-              const won = Number(log.won);
-              hourlyMap[hourLabel].spentAll += spent;
-              hourlyMap[hourLabel].wonAll += won;
-
-              const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
-              const isUpgrade = log.type === "upgrade" || log.type === "upgrades";
-              if (isCase) {
-                hourlyMap[hourLabel].spentCase += spent;
-                hourlyMap[hourLabel].wonCase += won;
-              } else if (isUpgrade) {
-                hourlyMap[hourLabel].spentUpgrade += spent;
-                hourlyMap[hourLabel].wonUpgrade += won;
-              }
+            const hourlyMap: Record<string, { spentAll: number; wonAll: number; spentCase: number; wonCase: number; spentUpgrade: number; wonUpgrade: number }> = {};
+            for (let i = 0; i < 24; i++) {
+              const label = `${String(i).padStart(2, "0")}:00`;
+              hourlyMap[label] = { spentAll: 0, wonAll: 0, spentCase: 0, wonCase: 0, spentUpgrade: 0, wonUpgrade: 0 };
             }
-          });
 
-          return Object.entries(hourlyMap).map(([hourLabel, data]) => {
-            const hourNum = parseInt(hourLabel.split(":")[0], 10);
-            const isFuture = tYear === new Date().getFullYear() && 
-                             tMonth === new Date().getMonth() && 
-                             tDay === new Date().getDate() && 
-                             hourNum > new Date().getHours();
+            dayLogs.forEach((log: ParsedLog) => {
+              const d = new Date(log.epoch);
+              const hourLabel = `${String(d.getHours()).padStart(2, "0")}:00`;
+              if (hourlyMap[hourLabel]) {
+                const spent = Number(log.spent);
+                const won = Number(log.won);
+                hourlyMap[hourLabel].spentAll += spent;
+                hourlyMap[hourLabel].wonAll += won;
 
-            return {
-              hour: hourLabel,
-              rtp: isFuture ? null : (data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0),
-              rtpCase: isFuture ? null : (data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0),
-              rtpUpgrade: isFuture ? null : (data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : 0)
-            };
-          });
-        };
+                const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+                const isUpgrade = log.type === "upgrade" || log.type === "upgrades";
+                if (isCase) {
+                  hourlyMap[hourLabel].spentCase += spent;
+                  hourlyMap[hourLabel].wonCase += won;
+                } else if (isUpgrade) {
+                  hourlyMap[hourLabel].spentUpgrade += spent;
+                  hourlyMap[hourLabel].wonUpgrade += won;
+                }
+              }
+            });
+
+            return Object.entries(hourlyMap).map(([hourLabel, data]) => {
+              const hourNum = parseInt(hourLabel.split(":")[0], 10);
+              const isFuture = tYear === new Date().getFullYear() && 
+                               tMonth === new Date().getMonth() && 
+                               tDay === new Date().getDate() && 
+                               hourNum > new Date().getHours();
+
+              return {
+                hour: hourLabel,
+                rtp: isFuture ? null : (data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : null),
+                rtpCase: isFuture ? null : (data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : null),
+                rtpUpgrade: isFuture ? null : (data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : null)
+              };
+            });
+          };
 
           // 2. НЕДЕЛЯ (При отсутствии трат возвращаем null)
           const getWeeklyStats = () => {
