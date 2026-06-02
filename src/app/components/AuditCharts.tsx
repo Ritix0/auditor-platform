@@ -39,7 +39,8 @@ interface StatsData {
   hourlyStats: { hour: string; rtp: number; rtpCase: number | null; rtpUpgrade: number | null }[];
   topCases: CaseItem[];
   todayStats: { hour: string; rtp: number | null; rtpCase: number | null; rtpUpgrade: number | null }[];
-  bestTodayCases: CaseItem[]; // Новое свойство для лучших суточных кейсов
+  bestTodayCases: CaseItem[]; 
+  worstTodayCases: CaseItem[];
 }
 
 interface AuditChartsProps {
@@ -87,6 +88,8 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
   const [chartData, setChartData] = useState<StatsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [isMounted, setIsMounted] = useState(false);
+
+  const [isWorstCasesExpanded, setIsWorstCasesExpanded] = useState(false);
 
   const parseDbDateToEpoch = (createdAt: string) => {
     if (!createdAt) return Date.now();
@@ -345,23 +348,8 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
               .slice(0, 4);
           };
 
-          // 6. 3 ЛУЧШИХ КЕЙСА ЗА СЕГОДНЯ
-          // 6. 3 ЛУЧШИХ КЕЙСА ЗА СЕГОДНЯ (Ступенчатый отбор по количеству открытий и RTP)
+          // 6. 10 ЛУЧШИХ КЕЙСА ЗА СЕГОДНЯ (Ступенчатый отбор по количеству открытий и RTP)
             const getBestTodayCases = () => {
-              if (parsed.length === 0) return [];
-
-              const maxEpoch = Math.max(...parsed.map((l: ParsedLog) => l.epoch));
-              const targetDate = new Date(maxEpoch);
-              
-              const tYear = targetDate.getFullYear();
-              const tMonth = targetDate.getMonth();
-              const tDay = targetDate.getDate();
-
-              const dayLogs = parsed.filter((l: ParsedLog) => {
-                const d = new Date(l.epoch);
-                return d.getFullYear() === tYear && d.getMonth() === tMonth && d.getDate() === tDay;
-              });
-
               const dayCaseLogs = dayLogs.filter((log: ParsedLog) => {
                 const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
                 return isCase && log.item_name !== "unknown";
@@ -388,39 +376,84 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
 
               if (allTodayCases.length === 0) return [];
 
-              // Массив ступеней выборки по количеству открытий (от большего к меньшему)
               const tiers = [1200, 800, 500, 300, 100, 50, 10];
               let selectedCases: typeof allTodayCases = [];
 
               for (const tier of tiers) {
-                // Фильтруем кейсы, которые набрали этот порог открытий
                 const tierCases = allTodayCases.filter(c => c.count >= tier);
-                // Если кейсы в этой ступени есть и хотя бы у одного из них RTP >= 110%
                 if (tierCases.length > 0 && tierCases.some(c => c.rtp >= 110)) {
                   selectedCases = tierCases;
-                  break; // Прерываем цикл, так как нашли максимально достоверную ступень
+                  break;
                 }
               }
 
-              // Если ни одна ступень не подошла (мало логов или везде RTP < 110), берем все доступные кейсы за сегодня
               if (selectedCases.length === 0) {
                 selectedCases = allTodayCases;
               }
 
-              // Сортируем по RTP и забираем топ-3 лучших
               return selectedCases
                 .sort((a, b) => b.rtp - a.rtp)
-                .slice(0, 3);
+                .slice(0, 12); // Увеличено до 10 лучших
             };
 
-          setChartData({
-            todayStats: getTodayStats(),
-            weeklyStats: getWeeklyStats(),
-            cyclicalStats: getCyclicalStats(),
-            hourlyStats: getHourlyStats(),
-            topCases: getTopCases(),
-            bestTodayCases: getBestTodayCases()
-          });
+            // 7. 10 ХУДШИХ КЕЙСОВ ЗА СЕГОДНЯ (Ступенчатый отбор)
+            const getWorstTodayCases = () => {
+              const dayCaseLogs = dayLogs.filter((log: ParsedLog) => {
+                const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+                return isCase && log.item_name !== "unknown";
+              });
+
+              const caseMetrics: Record<string, { spent: number; won: number; count: number; site: string }> = {};
+              dayCaseLogs.forEach((log: ParsedLog) => {
+                if (!caseMetrics[log.item_name]) {
+                  caseMetrics[log.item_name] = { spent: 0, won: 0, count: 0, site: log.site };
+                }
+                caseMetrics[log.item_name].spent += Number(log.spent);
+                caseMetrics[log.item_name].won += Number(log.won);
+                caseMetrics[log.item_name].count += 1;
+              });
+
+              const allTodayCases = Object.entries(caseMetrics).map(([name, data]) => ({
+                name,
+                site: data.site,
+                count: data.count,
+                spent: data.spent,
+                won: data.won,
+                rtp: Math.round((data.won / data.spent) * 100)
+              }));
+
+              if (allTodayCases.length === 0) return [];
+
+              const tiers = [1200, 800, 500, 300, 100, 50, 10];
+              let selectedCases: typeof allTodayCases = [];
+
+              for (const tier of tiers) {
+                const tierCases = allTodayCases.filter(c => c.count >= tier);
+                // Ищем откровенно сливные кейсы (RTP < 45) в этой весовой категории
+                if (tierCases.length > 0 && tierCases.some(c => c.rtp < 45)) {
+                  selectedCases = tierCases;
+                  break;
+                }
+              }
+
+              if (selectedCases.length === 0) {
+                selectedCases = allTodayCases;
+              }
+
+              return selectedCases
+                .sort((a, b) => a.rtp - b.rtp) // Сортируем от самых убыточных (низкий RTP) к прибыльным
+                .slice(0, 12); // Забираем 10 худших
+            };
+
+            setChartData({
+              todayStats: getTodayStats(),
+              weeklyStats: getWeeklyStats(),
+              cyclicalStats: getCyclicalStats(),
+              hourlyStats: getHourlyStats(),
+              topCases: getTopCases(),
+              bestTodayCases: getBestTodayCases(),
+              worstTodayCases: getWorstTodayCases() // Передача худших кейсов
+            });
         }
       } catch (err) {
         console.error("Ошибка получения чарт-логов:", err);
@@ -446,7 +479,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
         return "В сутках последнего лога не зафиксировано достаточного объема транзакций для составления вердикта.";
       }
       if (avgRtp < 45) {
-        return `Средний RTP за день активности составляет ${Math.round(avgRtp)}%. Фиксируется снижение отдачи алгоритмов относительно нормы в 45%.`;
+        return `Средний RTP за день активности составляет ${Math.round(avgRtp)}%. Фиксируется снижение отдачи алгоритмов относительно нормы in 45%.`;
       }
       return `Суточный показатель RTP стабилен и составляет ${Math.round(avgRtp)}%. Системы работают в пределах стандартного математического ожидания.`;
     }
@@ -738,6 +771,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
       </div>
 
       {/* НОВЫЙ БЛОК: 3 ЛУЧШИХ КЕЙСА ЗА СЕГОДНЯ */}
+      {/* 10 ЛУЧШИХ КЕЙСОВ ЗА СЕГОДНЯ (Раскрывающийся) */}
       <div className="border-t border-zinc-850 pt-5 flex flex-col gap-3">
         <div 
           onClick={() => setIsBestCasesExpanded(!isBestCasesExpanded)}
@@ -746,7 +780,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
           <div className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
             <span className="text-[10px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1">
-              3 лучших кейса за сегодня
+              10 лучших кейсов за сегодня
               {isBestCasesExpanded ? (
                 <CaretUp className="w-3 h-3 text-emerald-500" />
               ) : (
@@ -768,7 +802,6 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
               transition={{ duration: 0.2, ease: "easeInOut" }}
               className="overflow-hidden"
             >
-              {/* Строгая сетка на 3 горизонтальных элемента с уменьшенным gap */}
               <div className="grid grid-cols-3 gap-2 pt-1">
                 {loading ? (
                   <div className="col-span-3 text-center text-[10px] font-mono text-zinc-600 py-3">
@@ -776,35 +809,114 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
                   </div>
                 ) : chartData && chartData.bestTodayCases && chartData.bestTodayCases.length > 0 ? (
                   chartData.bestTodayCases.map((caseItem, idx) => {
-                    const isHighRtp = caseItem.rtp >= 110; // Выделяем зеленым те, что вышли в плюс
+                    const isHighRtp = caseItem.rtp >= 110;
                     return (
                       <motion.div
                         key={`best-today-${idx}`}
                         whileHover={{ scale: 1.01, y: -0.5 }}
                         whileTap={{ scale: 0.99 }}
                         onClick={() => onSelectCase(caseItem)}
-                        // Оптимальная высота 76px и внутренний отступ 2.5
-                        className="bg-emerald-950/5 hover:bg-emerald-950/10 border border-emerald-900/15 hover:border-emerald-500/30 p-2.5 rounded-xl flex flex-col justify-between h-[76px] cursor-pointer transition-all"
+                        className="bg-emerald-950/5 hover:bg-emerald-950/10 border border-emerald-500/10 hover:border-emerald-500/20 p-2.5 rounded-xl flex flex-col justify-between h-20 cursor-pointer transition-all"
                       >
-                        {/* Упорядоченная вертикальная шапка */}
                         <div className="flex flex-col min-w-0">
                           <span className="text-[10px] font-bold text-zinc-200 truncate leading-tight" title={caseItem.name}>
                             {caseItem.name}
                           </span>
-                          <span className="text-[6.5px] font-mono font-bold text-emerald-400/80 uppercase tracking-wider mt-0.5">
+                          <span className="text-[8px] font-mono font-bold text-emerald-400/80 uppercase tracking-wider mt-0.5">
                             {caseItem.site}
                           </span>
                         </div>
 
-                        {/* Упорядоченный табличный блок метрик без наложений */}
-                        <div className="flex flex-col gap-0.5 border-t border-zinc-900/80 pt-1 font-mono text-[8.5px]">
+                        <div className="flex flex-col gap-0.5 border-t border-zinc-900/80 pt-1 font-mono text-[9px]">
                           <div className="flex justify-between text-zinc-500 leading-none">
                             <span>Открыто:</span>
                             <span className="text-zinc-300 font-bold">{caseItem.count}</span>
                           </div>
                           <div className="flex justify-between leading-none">
                             <span>RTP дня:</span>
-                            <span className={`font-black ${isHighRtp ? "text-emerald-400" : "text-zinc-300"}`}>
+                            <span className={`text-[10px] font-black ${isHighRtp ? "text-emerald-400" : "text-zinc-300"}`}>
+                              {caseItem.rtp}%
+                            </span>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })
+                ) : (
+                  <div className="col-span-3 text-center text-[10px] font-mono text-zinc-600 py-3">
+                    Для расчета суточного топа требуется накопление логов за день.
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* 10 ХУДШИХ КЕЙСОВ ЗА СЕГОДНЯ (Раскрывающийся, Розовый) */}
+      <div className="border-t border-zinc-850 pt-5 flex flex-col gap-3">
+        <div 
+          onClick={() => setIsWorstCasesExpanded(!isWorstCasesExpanded)}
+          className="flex items-center justify-between cursor-pointer select-none group"
+        >
+          <div className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+            <span className="text-[10px] font-mono uppercase tracking-widest text-rose-400 font-bold flex items-center gap-1">
+              10 худших кейсов за сегодня
+              {isWorstCasesExpanded ? (
+                <CaretUp className="w-3 h-3 text-rose-500" />
+              ) : (
+                <CaretDown className="w-3 h-3 text-rose-500" />
+              )}
+            </span>
+          </div>
+          <span className="text-[9px] font-mono text-zinc-600 group-hover:text-zinc-400 transition-colors uppercase">
+            {isWorstCasesExpanded ? "СВЕРНУТЬ" : "РАЗВЕРНУТЬ"}
+          </span>
+        </div>
+
+        <AnimatePresence initial={false}>
+          {isWorstCasesExpanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2, ease: "easeInOut" }}
+              className="overflow-hidden"
+            >
+              <div className="grid grid-cols-3 gap-2 pt-1">
+                {loading ? (
+                  <div className="col-span-3 text-center text-[10px] font-mono text-zinc-600 py-3">
+                    Расчет показателей...
+                  </div>
+                ) : chartData && chartData.worstTodayCases && chartData.worstTodayCases.length > 0 ? (
+                  chartData.worstTodayCases.map((caseItem, idx) => {
+                    const isVeryLowRtp = caseItem.rtp < 45;
+                    return (
+                      <motion.div
+                        key={`worst-today-${idx}`}
+                        whileHover={{ scale: 1.01, y: -0.5 }}
+                        whileTap={{ scale: 0.99 }}
+                        onClick={() => onSelectCase(caseItem)}
+                        className="bg-rose-950/5 hover:bg-rose-950/10 border border-rose-500/10 hover:border-rose-500/20 p-2.5 rounded-xl flex flex-col justify-between h-20 cursor-pointer transition-all"
+                      >
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-[10px] font-bold text-zinc-200 truncate leading-tight" title={caseItem.name}>
+                            {caseItem.name}
+                          </span>
+                          <span className="text-[8px] font-mono font-bold text-rose-400/80 uppercase tracking-wider mt-0.5">
+                            {caseItem.site}
+                          </span>
+                        </div>
+
+                        <div className="flex flex-col gap-0.5 border-t border-zinc-900/80 pt-1 font-mono text-[9px]">
+                          <div className="flex justify-between text-zinc-500 leading-none">
+                            <span>Открыто:</span>
+                            <span className="text-zinc-300 font-bold">{caseItem.count}</span>
+                          </div>
+                          <div className="flex justify-between leading-none">
+                            <span>RTP дня:</span>
+                            <span className={`text-[10px] font-black ${isVeryLowRtp ? "text-rose-400" : "text-zinc-300"}`}>
                               {caseItem.rtp}%
                             </span>
                           </div>

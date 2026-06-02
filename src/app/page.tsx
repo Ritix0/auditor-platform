@@ -248,12 +248,12 @@ export default function Home() {
         )}
       </AnimatePresence>
 
-      {/* Модальное окно дисклеймера при первом входе */}
-      {/* Модальное окно дисклеймера при первом входе (Fullscreen takeover аналогично CaseModal) */}
+      {/* Модальное окно дисклеймера при первом входе (Исправлена прокрутка на мобильных) */}
       <AnimatePresence>
         {showFirstVisitWarning && (
           <div 
-            className="fixed inset-0 w-full h-full min-h-dvh bg-zinc-950/98 overflow-y-auto p-6 md:p-12 flex flex-col justify-center items-center"
+            // Убрали justify-center, чтобы включить естественный скролл на мобильных
+            className="fixed inset-0 w-full h-full min-h-dvh bg-zinc-950/98 overflow-y-auto p-4 md:p-12 flex flex-col items-center"
             style={{ zIndex: 9999999 }}
           >
             <motion.div
@@ -261,9 +261,9 @@ export default function Home() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.98, y: 15 }}
               transition={{ type: "spring", stiffness: 180, damping: 20 }}
-              // Жесткое ограничение ширины в обход CSS-классов:
+              // my-auto автоматически центрирует карточку по вертикали, а на мобильных разрешает скролл
               style={{ maxWidth: "460px", width: "100%" }}
-              className="mx-auto flex flex-col gap-6 relative bg-zinc-900 border border-zinc-800 p-6 md:p-8 rounded-3xl liquid-glass shadow-2xl overflow-hidden"
+              className="my-auto mx-auto flex flex-col gap-4 md:gap-6 relative bg-zinc-900 border border-zinc-800 p-5 md:p-8 rounded-3xl liquid-glass shadow-2xl"
             >
               <div className="absolute -right-12 -top-12 w-28 h-28 rounded-full bg-rose-500/10 blur-2xl pointer-events-none" />
               
@@ -277,25 +277,25 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="text-zinc-300 text-xs leading-relaxed flex flex-col gap-4">
+              <div className="text-zinc-300 text-xs leading-relaxed flex flex-col gap-3 md:gap-4">
                 <p>
                   Приветствуем в системе краудсорсингового мониторинга <strong className="text-white">«Народный Аудитор Кейсов»</strong>. Перед тем как приступить к анализу графиков и данных, пожалуйста, примите во внимание следующие факторы:
                 </p>
 
-                <div className="flex flex-col gap-3 bg-zinc-950/50 border border-zinc-850 p-3.5 rounded-2xl">
+                <div className="flex flex-col gap-2.5 md:gap-3 bg-zinc-950/50 border border-zinc-850 p-3 md:p-3.5 rounded-2xl">
                   <div className="flex items-start gap-2.5">
                     <div className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0 mt-1.5" />
                     <p className="text-zinc-400">
                       <strong className="text-zinc-200">Возможная неполнота данных:</strong> Если по какому-либо кейсу зафиксировано малое количество открытий, показатели окупаемости (RTP) могут временно отклоняться в сторону экстремального выигрыша или проигрыша. Всегда соотносите RTP с общим счетчиком логов.
                     </p>
                   </div>
-                  <div className="flex items-start gap-2.5 border-t border-zinc-900 pt-2.5">
+                  <div className="flex items-start gap-2.5 border-t border-zinc-900/60 pt-2.5">
                     <div className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0 mt-1.5" />
                     <p className="text-zinc-400">
                       <strong className="text-zinc-200">Математическая дисперсия:</strong> Алгоритмы сторонних сайтов динамически изменяют шансы в зависимости от времени суток и плотности трафика.
                     </p>
                   </div>
-                  <div className="flex items-start gap-2.5 border-t border-zinc-900 pt-2.5">
+                  <div className="flex items-start gap-2.5 border-t border-zinc-900/60 pt-2.5">
                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 mt-1.5" />
                     <p className="text-zinc-400">
                       <strong className="text-zinc-200">Конфиденциальность:</strong> Мы не собираем куки, пароли или Steam-сессии. Данные об открытиях отправляются полностью анонимизированно.
