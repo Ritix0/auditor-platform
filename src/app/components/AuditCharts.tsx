@@ -34,9 +34,9 @@ interface ParsedLog extends LogEntry {
 }
 
 interface StatsData {
-  weeklyStats: { day: string; rtp: number; rtpCase: number | null; rtpUpgrade: number | null }[];
-  cyclicalStats: { name: string; rtp: number; info: string }[];
-  hourlyStats: { hour: string; rtp: number; rtpCase: number | null; rtpUpgrade: number | null }[];
+  weeklyStats: { day: string; rtp: number | null; rtpCase: number | null; rtpUpgrade: number | null }[];
+  cyclicalStats: { name: string; rtp: number | null; info: string }[];
+  hourlyStats: { hour: string; rtp: number | null; rtpCase: number | null; rtpUpgrade: number | null }[];
   topCases: CaseItem[];
   todayStats: { hour: string; rtp: number | null; rtpCase: number | null; rtpUpgrade: number | null }[];
   bestTodayCases: CaseItem[]; 
@@ -89,6 +89,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
   const [loading, setLoading] = useState(true);
   const [isMounted, setIsMounted] = useState(false);
 
+  const [isBestCasesExpanded, setIsBestCasesExpanded] = useState(false);
   const [isWorstCasesExpanded, setIsWorstCasesExpanded] = useState(false);
 
   const parseDbDateToEpoch = (createdAt: string) => {
@@ -115,8 +116,6 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
     return localDate.getTime() - (diffMin * 60 * 1000);
   };
 
-  const [isBestCasesExpanded, setIsBestCasesExpanded] = useState(false);
-
   useEffect(() => {
     const handle = requestAnimationFrame(() => {
       setIsMounted(true);
@@ -133,7 +132,6 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
           const json = await res.json();
           const rawLogs: LogEntry[] = json.rawLogs || [];
 
-          // Оптимизация: разбор дат производится один раз для всех графиков
           const parsed: ParsedLog[] = rawLogs
             .map((l: LogEntry) => ({ 
               ...l, 
@@ -147,20 +145,18 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
             return;
           }
 
-          // Поиск последнего активного дня в базе данных
           const maxEpoch = Math.max(...parsed.map((l: ParsedLog) => l.epoch));
           const targetDate = new Date(maxEpoch);
           const tYear = targetDate.getFullYear();
           const tMonth = targetDate.getMonth();
           const tDay = targetDate.getDate();
 
-          // Выборка логов строго за этот день
           const dayLogs = parsed.filter((l: ParsedLog) => {
             const d = new Date(l.epoch);
             return d.getFullYear() === tYear && d.getMonth() === tMonth && d.getDate() === tDay;
           });
 
-          // 1. СЕГОДНЯ
+          // 1. СЕГОДНЯ (При отсутствии трат возвращаем null)
           const getTodayStats = () => {
             const hourlyMap: Record<string, { spentAll: number; wonAll: number; spentCase: number; wonCase: number; spentUpgrade: number; wonUpgrade: number }> = {};
             for (let i = 0; i < 24; i++) {
@@ -198,14 +194,14 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
 
               return {
                 hour: hourLabel,
-                rtp: isFuture ? null : (data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0),
-                rtpCase: isFuture ? null : (data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0),
-                rtpUpgrade: isFuture ? null : (data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : 0)
+                rtp: isFuture ? null : (data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : null),
+                rtpCase: isFuture ? null : (data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : null),
+                rtpUpgrade: isFuture ? null : (data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : null)
               };
             });
           };
 
-          // 2. НЕДЕЛЯ
+          // 2. НЕДЕЛЯ (При отсутствии трат возвращаем null)
           const getWeeklyStats = () => {
             const daysMap = new Map<string, { spentAll: number; wonAll: number; spentCase: number; wonCase: number; spentUpgrade: number; wonUpgrade: number }>();
             const daysList: string[] = [];
@@ -244,14 +240,14 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
               const data = daysMap.get(label)!;
               return {
                 day: label,
-                rtp: data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0,
-                rtpCase: data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0,
-                rtpUpgrade: data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : 0
+                rtp: data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : null,
+                rtpCase: data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : null,
+                rtpUpgrade: data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : null
               };
             });
           };
 
-          // 3. ПО ДНЯМ НЕДЕЛИ
+          // 3. ПО ДНЯМ НЕДЕЛИ (При отсутствии трат возвращаем null)
           const getCyclicalStats = () => {
             const weekdayMap: Record<number, { spent: number; won: number }> = {
               1: { spent: 0, won: 0 },
@@ -275,10 +271,10 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
             const weekdayNames = ["ВС", "ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ"];
             return [1, 2, 3, 4, 5, 6, 0].map(dayNum => {
               const data = weekdayMap[dayNum];
-              const rtp = data.spent > 0 ? Math.round((data.won / data.spent) * 100) : 0;
+              const rtp = data.spent > 0 ? Math.round((data.won / data.spent) * 100) : null;
               let info = "Норма";
               if (dayNum === 5 || dayNum === 6 || dayNum === 0) info = "Снижение RTP";
-              if (rtp < 25) info = "Низкая окупаемость";
+              if (rtp !== null && rtp < 25) info = "Низкая окупаемость";
               return { name: weekdayNames[dayNum], rtp, info };
             });
           };
@@ -314,9 +310,9 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
 
             return Object.entries(hourlyMap).map(([hourLabel, data]) => ({
               hour: hourLabel,
-              rtp: data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : 0,
-              rtpCase: data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : 0,
-              rtpUpgrade: data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : 0
+              rtp: data.spentAll > 0 ? Math.round((data.wonAll / data.spentAll) * 100) : null,
+              rtpCase: data.spentCase > 0 ? Math.round((data.wonCase / data.spentCase) * 100) : null,
+              rtpUpgrade: data.spentUpgrade > 0 ? Math.round((data.wonUpgrade / data.spentUpgrade) * 100) : null
             }));
           };
 
@@ -348,112 +344,111 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
               .slice(0, 4);
           };
 
-          // 6. 10 ЛУЧШИХ КЕЙСА ЗА СЕГОДНЯ (Ступенчатый отбор по количеству открытий и RTP)
-            const getBestTodayCases = () => {
-              const dayCaseLogs = dayLogs.filter((log: ParsedLog) => {
-                const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
-                return isCase && log.item_name !== "unknown";
-              });
-
-              const caseMetrics: Record<string, { spent: number; won: number; count: number; site: string }> = {};
-              dayCaseLogs.forEach((log: ParsedLog) => {
-                if (!caseMetrics[log.item_name]) {
-                  caseMetrics[log.item_name] = { spent: 0, won: 0, count: 0, site: log.site };
-                }
-                caseMetrics[log.item_name].spent += Number(log.spent);
-                caseMetrics[log.item_name].won += Number(log.won);
-                caseMetrics[log.item_name].count += 1;
-              });
-
-              const allTodayCases = Object.entries(caseMetrics).map(([name, data]) => ({
-                name,
-                site: data.site,
-                count: data.count,
-                spent: data.spent,
-                won: data.won,
-                rtp: Math.round((data.won / data.spent) * 100)
-              }));
-
-              if (allTodayCases.length === 0) return [];
-
-              const tiers = [1200, 800, 500, 300, 100, 50, 10];
-              let selectedCases: typeof allTodayCases = [];
-
-              for (const tier of tiers) {
-                const tierCases = allTodayCases.filter(c => c.count >= tier);
-                if (tierCases.length > 0 && tierCases.some(c => c.rtp >= 110)) {
-                  selectedCases = tierCases;
-                  break;
-                }
-              }
-
-              if (selectedCases.length === 0) {
-                selectedCases = allTodayCases;
-              }
-
-              return selectedCases
-                .sort((a, b) => b.rtp - a.rtp)
-                .slice(0, 12); // Увеличено до 10 лучших
-            };
-
-            // 7. 10 ХУДШИХ КЕЙСОВ ЗА СЕГОДНЯ (Ступенчатый отбор)
-            const getWorstTodayCases = () => {
-              const dayCaseLogs = dayLogs.filter((log: ParsedLog) => {
-                const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
-                return isCase && log.item_name !== "unknown";
-              });
-
-              const caseMetrics: Record<string, { spent: number; won: number; count: number; site: string }> = {};
-              dayCaseLogs.forEach((log: ParsedLog) => {
-                if (!caseMetrics[log.item_name]) {
-                  caseMetrics[log.item_name] = { spent: 0, won: 0, count: 0, site: log.site };
-                }
-                caseMetrics[log.item_name].spent += Number(log.spent);
-                caseMetrics[log.item_name].won += Number(log.won);
-                caseMetrics[log.item_name].count += 1;
-              });
-
-              const allTodayCases = Object.entries(caseMetrics).map(([name, data]) => ({
-                name,
-                site: data.site,
-                count: data.count,
-                spent: data.spent,
-                won: data.won,
-                rtp: Math.round((data.won / data.spent) * 100)
-              }));
-
-              if (allTodayCases.length === 0) return [];
-
-              const tiers = [1200, 800, 500, 300, 100, 50, 10];
-              let selectedCases: typeof allTodayCases = [];
-
-              for (const tier of tiers) {
-                const tierCases = allTodayCases.filter(c => c.count >= tier);
-                // Ищем откровенно сливные кейсы (RTP < 45) в этой весовой категории
-                if (tierCases.length > 0 && tierCases.some(c => c.rtp < 45)) {
-                  selectedCases = tierCases;
-                  break;
-                }
-              }
-
-              if (selectedCases.length === 0) {
-                selectedCases = allTodayCases;
-              }
-
-              return selectedCases
-                .sort((a, b) => a.rtp - b.rtp) // Сортируем от самых убыточных (низкий RTP) к прибыльным
-                .slice(0, 12); // Забираем 10 худших
-            };
-
-            setChartData({
-              todayStats: getTodayStats(),
-              weeklyStats: getWeeklyStats(),
-              cyclicalStats: getCyclicalStats(),
-              hourlyStats: getHourlyStats(),
-              topCases: getTopCases(),
-              bestTodayCases: getBestTodayCases(),
-              worstTodayCases: getWorstTodayCases() // Передача худших кейсов
+          // 6. 12 ЛУЧШИХ КЕЙСОВ ЗА СЕГОДНЯ
+          const getBestTodayCases = () => {
+            const dayCaseLogs = dayLogs.filter((log: ParsedLog) => {
+              const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+              return isCase && log.item_name !== "unknown";
             });
+
+            const caseMetrics: Record<string, { spent: number; won: number; count: number; site: string }> = {};
+            dayCaseLogs.forEach((log: ParsedLog) => {
+              if (!caseMetrics[log.item_name]) {
+                caseMetrics[log.item_name] = { spent: 0, won: 0, count: 0, site: log.site };
+              }
+              caseMetrics[log.item_name].spent += Number(log.spent);
+              caseMetrics[log.item_name].won += Number(log.won);
+              caseMetrics[log.item_name].count += 1;
+            });
+
+            const allTodayCases = Object.entries(caseMetrics).map(([name, data]) => ({
+              name,
+              site: data.site,
+              count: data.count,
+              spent: data.spent,
+              won: data.won,
+              rtp: Math.round((data.won / data.spent) * 100)
+            }));
+
+            if (allTodayCases.length === 0) return [];
+
+            const tiers = [1200, 800, 500, 300, 100, 50, 10];
+            let selectedCases: typeof allTodayCases = [];
+
+            for (const tier of tiers) {
+              const tierCases = allTodayCases.filter(c => c.count >= tier);
+              if (tierCases.length > 0 && tierCases.some(c => c.rtp >= 110)) {
+                selectedCases = tierCases;
+                break;
+              }
+            }
+
+            if (selectedCases.length === 0) {
+              selectedCases = allTodayCases;
+            }
+
+            return selectedCases
+              .sort((a, b) => b.rtp - a.rtp)
+              .slice(0, 12); // Ограничено до 12
+          };
+
+          // 7. 12 ХУДШИХ КЕЙСОВ ЗА СЕГОДНЯ
+          const getWorstTodayCases = () => {
+            const dayCaseLogs = dayLogs.filter((log: ParsedLog) => {
+              const isCase = log.type === "case" || log.type === "cases" || log.type === "open";
+              return isCase && log.item_name !== "unknown";
+            });
+
+            const caseMetrics: Record<string, { spent: number; won: number; count: number; site: string }> = {};
+            dayCaseLogs.forEach((log: ParsedLog) => {
+              if (!caseMetrics[log.item_name]) {
+                caseMetrics[log.item_name] = { spent: 0, won: 0, count: 0, site: log.site };
+              }
+              caseMetrics[log.item_name].spent += Number(log.spent);
+              caseMetrics[log.item_name].won += Number(log.won);
+              caseMetrics[log.item_name].count += 1;
+            });
+
+            const allTodayCases = Object.entries(caseMetrics).map(([name, data]) => ({
+              name,
+              site: data.site,
+              count: data.count,
+              spent: data.spent,
+              won: data.won,
+              rtp: Math.round((data.won / data.spent) * 100)
+            }));
+
+            if (allTodayCases.length === 0) return [];
+
+            const tiers = [1200, 800, 500, 300, 100, 50, 10];
+            let selectedCases: typeof allTodayCases = [];
+
+            for (const tier of tiers) {
+              const tierCases = allTodayCases.filter(c => c.count >= tier);
+              if (tierCases.length > 0 && tierCases.some(c => c.rtp < 45)) {
+                selectedCases = tierCases;
+                break;
+              }
+            }
+
+            if (selectedCases.length === 0) {
+              selectedCases = allTodayCases;
+            }
+
+            return selectedCases
+              .sort((a, b) => a.rtp - b.rtp)
+              .slice(0, 12); // Ограничено до 12
+          };
+
+          setChartData({
+            todayStats: getTodayStats(),
+            weeklyStats: getWeeklyStats(),
+            cyclicalStats: getCyclicalStats(),
+            hourlyStats: getHourlyStats(),
+            topCases: getTopCases(),
+            bestTodayCases: getBestTodayCases(),
+            worstTodayCases: getWorstTodayCases()
+          });
         }
       } catch (err) {
         console.error("Ошибка получения чарт-логов:", err);
@@ -479,7 +474,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
         return "В сутках последнего лога не зафиксировано достаточного объема транзакций для составления вердикта.";
       }
       if (avgRtp < 45) {
-        return `Средний RTP за день активности составляет ${Math.round(avgRtp)}%. Фиксируется снижение отдачи алгоритмов относительно нормы in 45%.`;
+        return `Средний RTP за день активности составляет ${Math.round(avgRtp)}%. Фиксируется снижение отдачи алгоритмов относительно нормы в 45%.`;
       }
       return `Суточный показатель RTP стабилен и составляет ${Math.round(avgRtp)}%. Системы работают в пределах стандартного математического ожидания.`;
     }
@@ -503,8 +498,8 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
     }
 
     if (activeTab === "hourly") {
-      const nightAvg = (chartData.hourlyStats.slice(0, 4).reduce((acc, curr) => acc + curr.rtp, 0)) / 4;
-      const dayAvg = (chartData.hourlyStats.slice(6, 12).reduce((acc, curr) => acc + curr.rtp, 0)) / 6;
+      const nightAvg = (chartData.hourlyStats.slice(0, 4).reduce((acc, curr) => acc + (curr.rtp ?? 0), 0)) / 4;
+      const dayAvg = (chartData.hourlyStats.slice(6, 12).reduce((acc, curr) => acc + (curr.rtp ?? 0), 0)) / 6;
       const hourDiff = Math.round(nightAvg - dayAvg);
 
       if (hourDiff > 5) {
@@ -513,7 +508,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
       return `Почасовой анализ показывает равномерное распределение шансов в течение суток. Крупных временных отклонений в алгоритмах не обнаружено.`;
     }
 
-    const rtpList = chartData.weeklyStats.map(d => d.rtp);
+    const rtpList = chartData.weeklyStats.map(d => d.rtp).filter((r): r is number => r !== null);
     const avgRtp = rtpList.length > 0 ? rtpList.reduce((a, b) => a + b, 0) / rtpList.length : 0;
     if (avgRtp < 45) {
       return `Взвешенный показатель окупаемости за прошедшую неделю составил ${Math.round(avgRtp)}%, что существенно ниже честного математического порога (45%).`;
@@ -619,7 +614,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
         </div>
       )}
 
-      {/* ТЕЛО ГРАФИКА */}
+      {/* ТЕЛО ГРАФИКА (С выводом "не открывались" вместо 0%) */}
       <div className="w-full h-60 relative mt-2">
         {loading || !isMounted ? (
           <div className="absolute inset-0 flex items-center justify-center font-mono text-xs text-zinc-500">
@@ -647,6 +642,9 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
                   itemStyle={itemStyle}
                   formatter={(value: unknown, name: unknown) => {
                     const label = name === "rtpCase" ? "RTP Кейсов" : name === "rtpUpgrade" ? "RTP Апгрейдов" : "Средний RTP";
+                    if (value === null || value === undefined) {
+                      return ["не открывались", label];
+                    }
                     return [`${value}%`, label];
                   }}
                 />
@@ -682,6 +680,9 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
                   itemStyle={itemStyle}
                   formatter={(value: unknown, name: unknown) => {
                     const label = name === "rtpCase" ? "RTP Кейсов" : name === "rtpUpgrade" ? "RTP Апгрейдов" : "Средний RTP";
+                    if (value === null || value === undefined) {
+                      return ["не открывались", label];
+                    }
                     return [`${value}%`, label];
                   }}
                 />
@@ -707,12 +708,15 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
                   itemStyle={itemStyle}
                   formatter={(value: unknown, _name: unknown, props: unknown) => {
                     const payloadEntry = props as { payload?: { info?: string } } | undefined;
+                    if (value === null || value === undefined) {
+                      return ["не открывались", payloadEntry?.payload?.info || ""];
+                    }
                     return [`${value}%`, payloadEntry?.payload?.info || ""];
                   }}
                 />
                 <Bar dataKey="rtp" radius={[4, 4, 0, 0]}>
                   {chartData.cyclicalStats.map((entry, index) => {
-                    const isRigged = entry.rtp < 25;
+                    const isRigged = entry.rtp !== null && entry.rtp < 25;
                     return <Cell key={`cell-${index}`} fill={isRigged ? "#f43f5e" : "#52525b"} />;
                   })}
                 </Bar>
@@ -738,6 +742,9 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
                   itemStyle={itemStyle}
                   formatter={(value: unknown, name: unknown) => {
                     const label = name === "rtpCase" ? "RTP Кейсов" : name === "rtpUpgrade" ? "RTP Апгрейдов" : "Средний RTP";
+                    if (value === null || value === undefined) {
+                      return ["не открывались", label];
+                    }
                     return [`${value}%`, label];
                   }}
                 />
@@ -770,8 +777,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
         </div>
       </div>
 
-      {/* НОВЫЙ БЛОК: 3 ЛУЧШИХ КЕЙСА ЗА СЕГОДНЯ */}
-      {/* 10 ЛУЧШИХ КЕЙСОВ ЗА СЕГОДНЯ (Раскрывающийся) */}
+      {/* 12 ЛУЧШИХ КЕЙСОВ ЗА СЕГОДНЯ (Раскрывающийся) */}
       <div className="border-t border-zinc-850 pt-5 flex flex-col gap-3">
         <div 
           onClick={() => setIsBestCasesExpanded(!isBestCasesExpanded)}
@@ -780,7 +786,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
           <div className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
             <span className="text-[10px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1">
-              10 лучших кейсов за сегодня
+              12 лучших кейсов за сегодня
               {isBestCasesExpanded ? (
                 <CaretUp className="w-3 h-3 text-emerald-500" />
               ) : (
@@ -853,7 +859,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
         </AnimatePresence>
       </div>
 
-      {/* 10 ХУДШИХ КЕЙСОВ ЗА СЕГОДНЯ (Раскрывающийся, Розовый) */}
+      {/* 12 ХУДШИХ КЕЙСОВ ЗА СЕГОДНЯ (Раскрывающийся, Розовый) */}
       <div className="border-t border-zinc-850 pt-5 flex flex-col gap-3">
         <div 
           onClick={() => setIsWorstCasesExpanded(!isWorstCasesExpanded)}
@@ -862,7 +868,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
           <div className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
             <span className="text-[10px] font-mono uppercase tracking-widest text-rose-400 font-bold flex items-center gap-1">
-              10 худших кейсов за сегодня
+              12 худших кейсов за сегодня
               {isWorstCasesExpanded ? (
                 <CaretUp className="w-3 h-3 text-rose-500" />
               ) : (

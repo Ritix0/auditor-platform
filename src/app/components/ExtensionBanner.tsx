@@ -36,7 +36,7 @@ export default function ExtensionBanner({ uniqueAuditors }: ExtensionBannerProps
       <div className="relative z-10 flex flex-col items-center justify-center gap-3 shrink-0">
         <div 
           className="bg-white border border-zinc-200 rounded-2xl relative overflow-hidden p-1.5 shadow-[0_8px_30px_rgba(255,255,255,0.08)] mx-auto flex items-center justify-center shrink-0"
-          style={{ width: "160px", height: "160px", minWidth: "160px", minHeight: "160px" }}
+          style={{ width: "200px", height: "200px", minWidth: "200px", minHeight: "200px" }}
         >
           {!imageError ? (
             <img 
