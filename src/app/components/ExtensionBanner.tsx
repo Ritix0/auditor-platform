@@ -82,7 +82,7 @@ export default function ExtensionBanner({ uniqueAuditors }: ExtensionBannerProps
         </div>
 
         <motion.a
-          href="https://github.com/Ritix0/caseaudit-extension/releases/download/v1.2.0/auditor-extension.zip"
+          href="https://chromewebstore.google.com/detail/%D0%BD%D0%B0%D1%80%D0%BE%D0%B4%D0%BD%D1%8B%D0%B9-%D0%B0%D1%83%D0%B4%D0%B8%D1%82%D0%BE%D1%80-%D0%BA%D0%B5%D0%B9%D1%81%D0%BE%D0%B2/iomihhboloafnankfpffffefmnekffmf"
           target="_blank"
           rel="noopener noreferrer"
           whileHover={{ scale: 1.02, y: -1 }}
