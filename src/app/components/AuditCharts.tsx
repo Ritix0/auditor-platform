@@ -388,6 +388,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
             }
 
             return selectedCases
+              .filter(c => c.rtp >= 50)
               .sort((a, b) => b.rtp - a.rtp)
               .slice(0, 12); // Ограничено до 12
           };
@@ -436,6 +437,7 @@ export default function AuditCharts({ onSelectCase }: AuditChartsProps) {
             }
 
             return selectedCases
+              .filter(c => c.rtp < 100)
               .sort((a, b) => a.rtp - b.rtp)
               .slice(0, 12); // Ограничено до 12
           };
